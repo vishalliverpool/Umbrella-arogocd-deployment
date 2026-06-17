@@ -6,7 +6,10 @@ on:
     paths:
       - "argocd/projects/**"
       - "argocd/apps/**"
+      - "argocd/install/**"
       - "charts/**"
+      - "helmfile.yaml"
+      - ".github/workflows/deploy-platform.yaml"
   workflow_dispatch:
     inputs:
       force_sync:
@@ -21,7 +24,7 @@ permissions:
 env:
   CLUSTER_NAME: ${{ vars.CLUSTER_NAME }}
   REGION: ${{ vars.AWS_REGION }}
-  ARGOCD_NS: ${{ vars.ARGOCD_NS }}
+  ARGOCD_NS: ${{ vars.ARGOCD_NS || 'argocd' }}
 
 jobs:
   deploy:
@@ -48,11 +51,99 @@ jobs:
             --name ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }}
 
+      # ── Apply CMP ConfigMap ─────────────────────────────────────
+      - name: Apply helmfile CMP ConfigMap
+        run: |
+          kubectl apply -f argocd/install/helmfile-cmp.yaml
+          echo "✅ helmfile CMP ConfigMap applied"
+
+      # ── Patch argocd-repo-server with helmfile sidecar ─────────
+      - name: Patch argocd-repo-server with helmfile sidecar
+        run: |
+          NS=${{ env.ARGOCD_NS }}
+
+          # Use the same image as the running repo-server for the init container
+          ARGOCD_IMAGE=$(kubectl get deployment argocd-repo-server \
+            -n ${NS} \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')
+          echo "ArgoCD image: ${ARGOCD_IMAGE}"
+
+          cat > /tmp/repo-server-patch.yaml << PATCHEOF
+          spec:
+            template:
+              spec:
+                volumes:
+                  - name: helmfile-cmp-cm
+                    configMap:
+                      name: helmfile-cmp-cm
+                  - name: custom-tools
+                    emptyDir: {}
+                initContainers:
+                  - name: copy-cmp-server
+                    image: ${ARGOCD_IMAGE}
+                    command: [cp, /usr/local/bin/argocd-cmp-server, /custom-tools/argocd-cmp-server]
+                    volumeMounts:
+                      - name: custom-tools
+                        mountPath: /custom-tools
+                containers:
+                  - name: helmfile-plugin
+                    image: ghcr.io/helmfile/helmfile:v0.167.1
+                    command: [/custom-tools/argocd-cmp-server]
+                    securityContext:
+                      runAsNonRoot: true
+                      runAsUser: 999
+                    env:
+                      - name: HELM_CACHE_HOME
+                        value: /helm-working-dir
+                      - name: HELM_CONFIG_HOME
+                        value: /helm-working-dir
+                      - name: HELM_DATA_HOME
+                        value: /helm-working-dir
+                    volumeMounts:
+                      - name: custom-tools
+                        mountPath: /custom-tools
+                      - name: var-files
+                        mountPath: /var/run/argocd
+                      - name: plugins
+                        mountPath: /home/argocd/cmp-server/plugins
+                      - name: tmp
+                        mountPath: /tmp
+                      - name: helm-working-dir
+                        mountPath: /helm-working-dir
+                      - name: helmfile-cmp-cm
+                        mountPath: /home/argocd/cmp-server/config/plugin.yaml
+                        subPath: plugin.yaml
+          PATCHEOF
+
+          kubectl patch deployment argocd-repo-server \
+            -n ${NS} \
+            --type=strategic \
+            --patch-file /tmp/repo-server-patch.yaml
+          echo "✅ argocd-repo-server patched with helmfile sidecar"
+
+      # ── Restart repo-server to pick up the new sidecar ─────────
+      - name: Restart argocd-repo-server
+        run: |
+          kubectl rollout restart deployment/argocd-repo-server \
+            -n ${{ env.ARGOCD_NS }}
+          kubectl rollout status deployment/argocd-repo-server \
+            -n ${{ env.ARGOCD_NS }} --timeout=180s
+          echo "✅ argocd-repo-server restarted"
+
       # ── Apply ArgoCD AppProject first ───────────────────────────
       - name: Apply AppProject (platform)
         run: |
           kubectl apply -f argocd/projects/platform.yaml
           echo "✅ AppProject applied"
+
+      # ── Delete existing paas-app so it is recreated cleanly ────
+      - name: Delete existing paas-app (clean recreate)
+        run: |
+          kubectl delete application paas-app \
+            -n ${{ env.ARGOCD_NS }} \
+            --ignore-not-found \
+            --wait=false
+          echo "✅ Old paas-app deleted (if it existed)"
 
       # ── Apply the single paas-app umbrella Application ─────────
       - name: Apply paas-app (umbrella Application)

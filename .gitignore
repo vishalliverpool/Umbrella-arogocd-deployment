@@ -1,7 +1,6 @@
 # Local-only — never push to git
 eksctl/
 bootstrap/
-argocd/install/
 
 # Helm dependency cache
 charts/**/charts/

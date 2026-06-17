@@ -13,19 +13,7 @@ spec:
 
   destinations:
     - server: https://kubernetes.default.svc
-      namespace: ingress-nginx
-    - server: https://kubernetes.default.svc
-      namespace: cert-manager
-    - server: https://kubernetes.default.svc
-      namespace: monitoring
-    - server: https://kubernetes.default.svc
-      namespace: logging
-    - server: https://kubernetes.default.svc
-      namespace: kube-system
-    - server: https://kubernetes.default.svc
-      namespace: platform
-    - server: https://kubernetes.default.svc
-      namespace: argocd
+      namespace: "*"
 
   clusterResourceWhitelist:
     - group: "*"

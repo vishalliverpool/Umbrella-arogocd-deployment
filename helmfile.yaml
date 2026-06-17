@@ -1,0 +1,50 @@
+repositories:
+  - name: ingress-nginx
+    url: https://kubernetes.github.io/ingress-nginx
+  - name: jetstack
+    url: https://charts.jetstack.io
+  - name: metrics-server
+    url: https://kubernetes-sigs.github.io/metrics-server/
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+  - name: external-dns
+    url: https://kubernetes-sigs.github.io/external-dns/
+
+releases:
+  - name: ingress-nginx
+    namespace: ingress-nginx
+    createNamespace: true
+    chart: ./charts/ingress-nginx
+
+  - name: cert-manager
+    namespace: cert-manager
+    createNamespace: true
+    chart: ./charts/cert-manager
+
+  - name: metrics-server
+    namespace: kube-system
+    chart: ./charts/metrics-server
+
+  - name: prometheus
+    namespace: monitoring
+    createNamespace: true
+    chart: ./charts/prometheus
+
+  - name: loki
+    namespace: logging
+    createNamespace: true
+    chart: ./charts/loki
+
+  - name: grafana
+    namespace: monitoring
+    chart: ./charts/grafana
+
+  - name: promtail
+    namespace: logging
+    chart: ./charts/promtail
+
+  - name: external-dns
+    namespace: kube-system
+    chart: ./charts/external-dns

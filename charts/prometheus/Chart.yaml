@@ -1,0 +1,9 @@
+apiVersion: v2
+name: prometheus
+description: Prometheus + Alertmanager monitoring stack (kube-prometheus-stack)
+type: application
+version: 0.1.0
+dependencies:
+  - name: kube-prometheus-stack
+    version: "58.5.3"
+    repository: https://prometheus-community.github.io/helm-charts
