@@ -5,9 +5,21 @@ spec:
         - name: helmfile-cmp-cm
           configMap:
             name: helmfile-cmp-cm
+        - name: custom-tools
+          emptyDir: {}
+      initContainers:
+        - name: copy-helmfile
+          image: ghcr.io/helmfile/helmfile:v0.167.1
+          command:
+            - sh
+            - -c
+            - cp $(which helmfile) /custom-tools/helmfile && chmod +x /custom-tools/helmfile
+          volumeMounts:
+            - name: custom-tools
+              mountPath: /custom-tools
       containers:
         - name: helmfile-plugin
-          image: ghcr.io/helmfile/helmfile:v0.167.1
+          image: quay.io/argoproj/argocd:v2.10.7
           command: [/var/run/argocd/argocd-cmp-server]
           env:
             - name: HELM_CACHE_HOME
@@ -16,7 +28,11 @@ spec:
               value: /helm-working-dir
             - name: HELM_DATA_HOME
               value: /helm-working-dir
+            - name: PATH
+              value: /custom-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           volumeMounts:
+            - name: custom-tools
+              mountPath: /custom-tools
             - name: var-files
               mountPath: /var/run/argocd
             - name: plugins
