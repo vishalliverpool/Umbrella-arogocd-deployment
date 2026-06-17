@@ -6,7 +6,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: platform
+  project: default
   source:
     repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
     targetRevision: HEAD
