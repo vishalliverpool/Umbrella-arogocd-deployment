@@ -1,9 +1,9 @@
 apiVersion: v2
 name: platform-umbrella
 description: |
-  Platform umbrella chart — single source of truth for all 8 components.
-  Each ArgoCD Application deploys this chart to its own namespace with
-  only that component's condition enabled.
+  Platform umbrella chart — all 8 components bundled into one Helm release "paas".
+  Deployed as a single ArgoCD Application (paas-app) to the "platform" namespace.
+  Open paas-app in ArgoCD UI to see all 8 components' resources in one view.
 type: application
 version: 0.1.0
 appVersion: "1.0.0"

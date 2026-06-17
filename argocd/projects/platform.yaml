@@ -6,7 +6,7 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  description: "Platform — 8 components, each in its own namespace, managed from one umbrella chart"
+  description: "Platform — 8 components bundled as one paas-app umbrella chart release"
 
   sourceRepos:
     - "*"
@@ -22,6 +22,8 @@ spec:
       namespace: logging
     - server: https://kubernetes.default.svc
       namespace: kube-system
+    - server: https://kubernetes.default.svc
+      namespace: platform
     - server: https://kubernetes.default.svc
       namespace: argocd
 

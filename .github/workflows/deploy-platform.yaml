@@ -33,7 +33,6 @@ jobs:
         uses: actions/checkout@v4
 
       # ── AWS auth via OIDC (no long-lived keys) ─────────────────
-      # Secret: AWS_ROLE_ARN = arn:aws:iam::218804696766:role/github-actions-deploy
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -55,13 +54,13 @@ jobs:
           kubectl apply -f argocd/projects/platform.yaml
           echo "✅ AppProject applied"
 
-      # ── Apply the single umbrella Application ───────────────────
-      - name: Apply root Application (App of Apps)
+      # ── Apply the single paas-app umbrella Application ─────────
+      - name: Apply paas-app (umbrella Application)
         run: |
-          kubectl apply -f argocd/apps/root-app.yaml
-          echo "✅ platform-root (App of Apps) applied"
+          kubectl apply -f argocd/apps/paas-app.yaml
+          echo "✅ paas-app applied — all 8 components bundled inside"
 
-      # ── Optional: force a hard-refresh on all apps ──────────────
+      # ── Optional: force a hard-refresh ─────────────────────────
       - name: Force ArgoCD sync (if requested)
         if: ${{ inputs.force_sync == true }}
         env:
@@ -71,32 +70,35 @@ jobs:
           curl -sSL -o argocd \
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x argocd
-          for app in platform-root ingress-nginx cert-manager metrics-server prometheus loki grafana promtail external-dns; do
-            ./argocd app sync "$app" \
-              --server "$ARGOCD_SERVER" \
-              --auth-token "$ARGOCD_AUTH_TOKEN" \
-              --insecure --force --prune || true
-          done
+          ./argocd app sync paas-app \
+            --server "$ARGOCD_SERVER" \
+            --auth-token "$ARGOCD_AUTH_TOKEN" \
+            --insecure --force --prune || true
 
-      # ── Wait for root app to be Synced ───────────────────────────
-      - name: Wait for root app sync
+      # ── Wait for paas-app to be Synced ──────────────────────────
+      - name: Wait for paas-app sync
         run: |
-          echo "⏳ Waiting for platform-root to sync child apps..."
-          kubectl wait application/platform-root \
+          echo "⏳ Waiting for paas-app to sync all 8 components..."
+          kubectl wait application/paas-app \
             -n ${{ env.ARGOCD_NS }} \
             --for=jsonpath='{.status.sync.status}'=Synced \
-            --timeout=300s || true
+            --timeout=600s || true
 
-      # ── Print status of all 9 apps ───────────────────────────────
-      - name: Show all application statuses
+      # ── Print paas-app status ────────────────────────────────────
+      - name: Show paas-app status
         if: always()
         run: |
           echo ""
           echo "══════════════════════════════════════════════════"
-          kubectl get applications -n ${{ env.ARGOCD_NS }} \
+          kubectl get application paas-app -n ${{ env.ARGOCD_NS }} \
             -o custom-columns=\
           NAME:.metadata.name,\
           SYNC:.status.sync.status,\
           HEALTH:.status.health.status,\
           NAMESPACE:.spec.destination.namespace
           echo "══════════════════════════════════════════════════"
+          echo ""
+          echo "Resource summary:"
+          kubectl get application paas-app -n ${{ env.ARGOCD_NS }} \
+            -o jsonpath='{range .status.resources[*]}{.kind}{"\t"}{.name}{"\t"}{.health.status}{"\n"}{end}' \
+            | sort | head -40 || true

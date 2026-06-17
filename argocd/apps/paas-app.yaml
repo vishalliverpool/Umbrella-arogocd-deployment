@@ -1,12 +1,10 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: cert-manager
+  name: paas-app
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
-  annotations:
-    argocd.argoproj.io/sync-wave: "1"
 spec:
   project: platform
   source:
@@ -14,12 +12,12 @@ spec:
     targetRevision: HEAD
     path: charts/platform-umbrella
     helm:
-      releaseName: cert-manager
+      releaseName: paas
       valueFiles:
-        - values/cert-manager.yaml
+        - values/platform.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: cert-manager
+    namespace: platform
   syncPolicy:
     automated:
       prune: true
