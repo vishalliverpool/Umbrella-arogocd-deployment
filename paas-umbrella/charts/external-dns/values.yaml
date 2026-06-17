@@ -1,0 +1,11 @@
+external-dns:
+  provider: aws
+  aws: {region: us-east-1}
+  txtOwnerId: platform-cluster
+  policy: sync
+  sources: [service, ingress]
+  serviceAccount:
+    create: true
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::218804696766:role/platform-cluster-external-dns"
+  resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 200m, memory: 128Mi}}

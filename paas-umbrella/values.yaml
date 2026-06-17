@@ -1,4 +1,4 @@
-# Platform infrastructure — parent chart configuration for all 8 upstream charts
+# Platform parent chart configuration for all 8 upstream charts
 
 ingress-nginx:
   controller:
@@ -17,12 +17,8 @@ ingress-nginx:
 cert-manager:
   installCRDs: true
   resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 256Mi
+    requests: {cpu: 50m, memory: 64Mi}
+    limits: {cpu: 200m, memory: 256Mi}
 
 metrics-server:
   defaultArgs:
@@ -35,52 +31,23 @@ kube-prometheus-stack:
   prometheus:
     prometheusSpec:
       retention: 15d
-      resources:
-        requests:
-          cpu: 200m
-          memory: 512Mi
-        limits:
-          cpu: 1000m
-          memory: 2Gi
+      resources: {requests: {cpu: 200m, memory: 512Mi}, limits: {cpu: 1000m, memory: 2Gi}}
   grafana:
     enabled: false
 
 loki:
-  loki:
-    auth_enabled: false
-    commonConfig:
-      replication_factor: 1
-    storage:
-      type: filesystem
-  singleBinary:
-    replicas: 1
-  gateway:
-    enabled: false
-  monitoring:
-    selfMonitoring:
-      enabled: false
-      grafanaAgent:
-        installOperator: false
-    lokiCanary:
-      enabled: false
-  test:
-    enabled: false
+  loki: {auth_enabled: false, commonConfig: {replication_factor: 1}, storage: {type: filesystem}}
+  singleBinary: {replicas: 1}
+  gateway: {enabled: false}
+  monitoring: {selfMonitoring: {enabled: false, grafanaAgent: {installOperator: false}}, lokiCanary: {enabled: false}}
+  test: {enabled: false}
 
 grafana:
   replicas: 1
   adminUser: admin
   adminPassword: "cjbsOWbhOBpQSgTtgcjs"
-  persistence:
-    enabled: true
-    storageClassName: gp2
-    size: 10Gi
-  resources:
-    requests:
-      cpu: 100m
-      memory: 256Mi
-    limits:
-      cpu: 500m
-      memory: 512Mi
+  persistence: {enabled: true, storageClassName: gp2, size: 10Gi}
+  resources: {requests: {cpu: 100m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}
   datasources:
     datasources.yaml:
       apiVersion: 1
@@ -90,14 +57,10 @@ grafana:
           url: http://prometheus-operated.monitoring.svc.cluster.local:9090
           access: proxy
           isDefault: true
-          jsonData:
-            timeInterval: "30s"
         - name: Loki
           type: loki
           url: http://loki.logging.svc.cluster.local:3100
           access: proxy
-          jsonData:
-            maxLines: 1000
   dashboardProviders:
     dashboardproviders.yaml:
       apiVersion: 1
@@ -111,90 +74,41 @@ grafana:
             path: /var/lib/grafana/dashboards/platform
   dashboards:
     platform:
-      kubernetes-cluster:
-        gnetId: 7249
-        revision: 1
-        datasource: Prometheus
-      nginx-ingress:
-        gnetId: 9614
-        revision: 1
-        datasource: Prometheus
-      cert-manager:
-        gnetId: 11001
-        revision: 1
-        datasource: Prometheus
-      loki-explorer:
-        gnetId: 13639
-        revision: 2
-        datasource: Loki
-      node-exporter:
-        gnetId: 1860
-        revision: 37
-        datasource: Prometheus
-  serviceMonitor:
-    enabled: true
+      kubernetes-cluster: {gnetId: 7249, revision: 1, datasource: Prometheus}
+      nginx-ingress: {gnetId: 9614, revision: 1, datasource: Prometheus}
+      cert-manager: {gnetId: 11001, revision: 1, datasource: Prometheus}
+      loki-explorer: {gnetId: 13639, revision: 2, datasource: Loki}
+      node-exporter: {gnetId: 1860, revision: 37, datasource: Prometheus}
+  serviceMonitor: {enabled: true}
 
 promtail:
   config:
     clients:
       - url: http://loki.logging.svc.cluster.local:3100/loki/api/v1/push
     snippets:
-      pipelineStages:
-        - cri: {}
+      pipelineStages: [{cri: {}}]
       scrapeConfigs: |
         - job_name: kubernetes-pods
-          pipeline_stages:
-            - cri: {}
-          kubernetes_sd_configs:
-            - role: pod
+          pipeline_stages: [{cri: {}}]
+          kubernetes_sd_configs: [{role: pod}]
           relabel_configs:
-            - source_labels: [__meta_kubernetes_pod_node_name]
-              target_label: __host__
-            - action: labelmap
-              regex: __meta_kubernetes_pod_label_(.+)
-            - action: replace
-              replacement: $1
-              separator: /
-              source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_pod_name]
-              target_label: job
-            - action: replace
-              source_labels: [__meta_kubernetes_namespace]
-              target_label: namespace
-            - action: replace
-              source_labels: [__meta_kubernetes_pod_name]
-              target_label: pod
-            - action: replace
-              source_labels: [__meta_kubernetes_pod_container_name]
-              target_label: container
-            - replacement: /var/log/pods/*$1/*.log
-              separator: /
-              source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
-              target_label: __path__
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 128Mi
+            - {source_labels: [__meta_kubernetes_pod_node_name], target_label: __host__}
+            - {action: labelmap, regex: __meta_kubernetes_pod_label_(.+)}
+            - {action: replace, replacement: "$1", separator: "/", source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_pod_name], target_label: job}
+            - {action: replace, source_labels: [__meta_kubernetes_namespace], target_label: namespace}
+            - {action: replace, source_labels: [__meta_kubernetes_pod_name], target_label: pod}
+            - {action: replace, source_labels: [__meta_kubernetes_pod_container_name], target_label: container}
+            - {replacement: /var/log/pods/*$1/*.log, separator: "/", source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name], target_label: __path__}
+  resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 200m, memory: 128Mi}}
 
 external-dns:
   provider: aws
-  aws:
-    region: us-east-1
+  aws: {region: us-east-1}
   txtOwnerId: platform-cluster
   policy: sync
-  sources:
-    - service
-    - ingress
+  sources: [service, ingress]
   serviceAccount:
     create: true
     annotations:
       eks.amazonaws.com/role-arn: "arn:aws:iam::218804696766:role/platform-cluster-external-dns"
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 200m
-      memory: 128Mi
+  resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 200m, memory: 128Mi}}

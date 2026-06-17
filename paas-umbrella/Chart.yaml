@@ -1,6 +1,6 @@
 apiVersion: v2
 name: platform
-description: Platform infrastructure — all 8 components
+description: Platform infrastructure — all 8 components from upstream repos
 type: application
 version: 0.1.0
 dependencies:
