@@ -14,6 +14,10 @@ spec:
     chart: {{ .chart }}
     helm:
       releaseName: {{ .name }}
+      {{- with .values }}
+      valuesObject:
+{{ toYaml . | indent 8 }}
+      {{- end }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ .namespace }}

@@ -10,7 +10,7 @@ REGION       ?= us-east-1
 ARGOCD_NS    ?= argocd
 GIT_REPO     ?= https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
 
-.PHONY: all cluster argocd deploy get-argocd helm-deps lint destroy help
+.PHONY: all cluster argocd deploy get-argocd lint template sync destroy help
 
 ## ── Full setup (runs steps 1 → 3 in order) ──────────────────
 all: cluster argocd deploy
@@ -23,9 +23,9 @@ cluster:
 argocd:
 	@bash bootstrap/02-install-argocd.sh
 
-## ── Step 3: Deploy platform umbrella via ArgoCD ──────────────
+## ── Step 3: Deploy paas-app (App-of-Apps) via ArgoCD ─────────
 deploy:
-	@GIT_REPO=$(GIT_REPO) bash bootstrap/03-deploy-platform.sh
+	kubectl apply -f argocd/apps/paas-app.yaml
 
 ## ── Get ArgoCD credentials (run after 'make argocd') ─────────
 get-argocd:
@@ -39,21 +39,17 @@ get-argocd:
 		-o jsonpath='{.data.password}' 2>/dev/null | base64 --decode)"
 	@echo "──────────────────────────────────────────────"
 
-## ── Update helm dependency lock (run after editing Chart.yaml) ─
-helm-deps:
-	helm dependency update charts/platform-umbrella
-
-## ── Lint the umbrella chart ──────────────────────────────────
+## ── Lint the app-of-apps chart ───────────────────────────────
 lint:
-	helm lint charts/platform-umbrella
+	helm lint app-of-apps
 
-## ── Dry-run template render ──────────────────────────────────
+## ── Dry-run template render (shows the 8 child Applications) ──
 template:
-	helm template platform charts/platform-umbrella --debug 2>&1 | head -200
+	helm template paas app-of-apps --debug 2>&1 | head -200
 
-## ── Force ArgoCD to hard-sync the umbrella ───────────────────
+## ── Force ArgoCD to hard-sync the parent app ─────────────────
 sync:
-	argocd app sync platform-umbrella --force
+	argocd app sync paas-app --force
 
 ## ── Destroy everything (cluster + all resources) ─────────────
 destroy:
@@ -67,12 +63,11 @@ help:
 	@echo ""
 	@echo "  make cluster       — Create EKS cluster via eksctl"
 	@echo "  make argocd        — Install ArgoCD (prints URL + password)"
-	@echo "  make deploy        — Apply platform umbrella Application to ArgoCD"
+	@echo "  make deploy        — Apply paas-app (App-of-Apps) to ArgoCD"
 	@echo "  make all           — Run all 3 steps in order"
 	@echo "  make get-argocd    — Print ArgoCD URL and password"
-	@echo "  make helm-deps     — Update Helm dependency lock file"
-	@echo "  make lint          — Lint umbrella chart"
-	@echo "  make template      — Dry-run template render"
-	@echo "  make sync          — Force ArgoCD sync"
+	@echo "  make lint          — Lint app-of-apps chart"
+	@echo "  make template      — Dry-run template render (8 child apps)"
+	@echo "  make sync          — Force ArgoCD sync of paas-app"
 	@echo "  make destroy       — Delete EKS cluster (irreversible!)"
 	@echo ""
