@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: platform
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  description: "Platform umbrella — 8 infrastructure components managed as one"
+
+  sourceRepos:
+    - "*"   # Your Git repo + all upstream Helm repos
+
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: platform        # Primary namespace for umbrella chart
+    - server: https://kubernetes.default.svc
+      namespace: kube-system     # metrics-server, external-dns
+    - server: https://kubernetes.default.svc
+      namespace: argocd
+
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  roles:
+    - name: platform-admin
+      description: Full access to platform project
+      policies:
+        - p, proj:platform:platform-admin, applications, *, platform/*, allow
