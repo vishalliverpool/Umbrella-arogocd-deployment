@@ -1,0 +1,5 @@
+apiVersion: v2
+name: paas-app-of-apps
+description: Parent Application that creates 8 child Applications
+type: application
+version: 0.1.0

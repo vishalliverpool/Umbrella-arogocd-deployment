@@ -36,17 +36,15 @@ spec:
   source:
     repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
     targetRevision: HEAD
-    path: paas-umbrella
+    path: app-of-apps
     helm:
-      releaseName: platform
+      releaseName: paas
   destination:
     server: https://kubernetes.default.svc
+    namespace: argocd
   syncPolicy:
     automated:
-      prune: false
-      selfHeal: false
+      prune: true
+      selfHeal: true
     syncOptions:
       - CreateNamespace=true
-      - ServerSideApply=true
-      - RespectIgnoreDifferences=true
-      - Validate=false
