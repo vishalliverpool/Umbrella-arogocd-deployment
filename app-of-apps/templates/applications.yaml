@@ -9,6 +9,11 @@ metadata:
 spec:
   project: paas-infra
   source:
+    {{- if .path }}
+    repoURL: {{ $.Values.repoURL }}
+    targetRevision: {{ $.Values.targetRevision | default "HEAD" }}
+    path: {{ .path }}
+    {{- else }}
     repoURL: {{ .repo }}
     targetRevision: {{ .version }}
     chart: {{ .chart }}
@@ -18,6 +23,7 @@ spec:
       valuesObject:
 {{ toYaml . | indent 8 }}
       {{- end }}
+    {{- end }}
   destination:
     server: https://kubernetes.default.svc
     namespace: {{ .namespace }}

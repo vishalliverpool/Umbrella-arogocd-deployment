@@ -1,6 +1,14 @@
 # App-of-Apps — each entry becomes a child ArgoCD Application.
 # `values` is passed straight to the upstream chart (no chart-name nesting,
 # since each child Application deploys the upstream chart directly).
+#
+# Two source styles per app:
+#   - upstream Helm chart: set repo + chart + version (+ optional values)
+#   - local git manifests: set path (sourced from repoURL below)
+
+# Git repo for local-path apps (e.g. cluster-issuers)
+repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
+targetRevision: HEAD
 
 apps:
   - name: ingress-nginx
@@ -158,3 +166,10 @@ apps:
       resources:
         requests: {cpu: 50m, memory: 64Mi}
         limits: {cpu: 200m, memory: 128Mi}
+
+  # Local manifests (not an upstream chart) — letsencrypt ClusterIssuers.
+  # Depends on cert-manager CRDs; SkipDryRunOnMissingResource lets it retry
+  # cleanly until cert-manager is up.
+  - name: cluster-issuers
+    namespace: cert-manager
+    path: cluster-issuers
