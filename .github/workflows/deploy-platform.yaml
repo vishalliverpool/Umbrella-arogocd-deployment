@@ -19,9 +19,9 @@ permissions:
   contents: read
 
 env:
-  CLUSTER_NAME: platform-cluster
-  REGION: us-east-1
-  ARGOCD_NS: argocd
+  CLUSTER_NAME: ${{ vars.CLUSTER_NAME }}
+  REGION: ${{ vars.AWS_REGION }}
+  ARGOCD_NS: ${{ vars.ARGOCD_NS }}
 
 jobs:
   deploy:
