@@ -1,0 +1,32 @@
+## Deployed to namespace: kube-system
+external-dns:
+  enabled: true
+  provider: aws
+  aws:
+    region: us-east-1
+    zoneType: public
+  policy: upsert-only
+  registry: txt
+  txtOwnerId: platform-cluster
+  interval: 1m
+  sources:
+    - service
+    - ingress
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: "arn:aws:iam::218804696766:role/platform-cluster-external-dns"
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+ingress-nginx:    { enabled: false }
+cert-manager:     { enabled: false }
+metrics-server:   { enabled: false }
+prometheus:       { enabled: false }
+loki:             { enabled: false }
+grafana:          { enabled: false }
+promtail:         { enabled: false }

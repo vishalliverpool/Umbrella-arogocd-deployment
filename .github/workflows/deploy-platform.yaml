@@ -56,48 +56,47 @@ jobs:
           echo "✅ AppProject applied"
 
       # ── Apply the single umbrella Application ───────────────────
-      - name: Apply platform-umbrella Application
+      - name: Apply root Application (App of Apps)
         run: |
-          kubectl apply -f argocd/apps/platform-umbrella.yaml
-          echo "✅ platform-umbrella Application applied"
+          kubectl apply -f argocd/apps/root-app.yaml
+          echo "✅ platform-root (App of Apps) applied"
 
-      # ── Optional: force a hard-refresh via argocd CLI ──────────
+      # ── Optional: force a hard-refresh on all apps ──────────────
       - name: Force ArgoCD sync (if requested)
         if: ${{ inputs.force_sync == true }}
         env:
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}       # e.g. abc.elb.amazonaws.com
-          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }} # argocd account generate-token
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
         run: |
           curl -sSL -o argocd \
             https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
           chmod +x argocd
-          ./argocd app sync platform-umbrella \
-            --server "$ARGOCD_SERVER" \
-            --auth-token "$ARGOCD_AUTH_TOKEN" \
-            --insecure \
-            --force \
-            --prune
+          for app in platform-root ingress-nginx cert-manager metrics-server prometheus loki grafana promtail external-dns; do
+            ./argocd app sync "$app" \
+              --server "$ARGOCD_SERVER" \
+              --auth-token "$ARGOCD_AUTH_TOKEN" \
+              --insecure --force --prune || true
+          done
 
-      # ── Wait up to 5 min for sync to complete ───────────────────
-      - name: Wait for Synced condition
+      # ── Wait for root app to be Synced ───────────────────────────
+      - name: Wait for root app sync
         run: |
-          echo "⏳ Waiting for platform-umbrella to sync..."
-          kubectl wait application/platform-umbrella \
+          echo "⏳ Waiting for platform-root to sync child apps..."
+          kubectl wait application/platform-root \
             -n ${{ env.ARGOCD_NS }} \
             --for=jsonpath='{.status.sync.status}'=Synced \
             --timeout=300s || true
 
-      # ── Print final status ──────────────────────────────────────
-      - name: Show application status
+      # ── Print status of all 9 apps ───────────────────────────────
+      - name: Show all application statuses
         if: always()
         run: |
           echo ""
           echo "══════════════════════════════════════════════════"
-          kubectl get application platform-umbrella \
-            -n ${{ env.ARGOCD_NS }} \
+          kubectl get applications -n ${{ env.ARGOCD_NS }} \
             -o custom-columns=\
           NAME:.metadata.name,\
           SYNC:.status.sync.status,\
           HEALTH:.status.health.status,\
-          MESSAGE:.status.conditions[0].message
+          NAMESPACE:.spec.destination.namespace
           echo "══════════════════════════════════════════════════"

@@ -6,16 +6,22 @@ metadata:
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  description: "Platform umbrella — 8 infrastructure components managed as one"
+  description: "Platform — 8 components, each in its own namespace, managed from one umbrella chart"
 
   sourceRepos:
-    - "*"   # Your Git repo + all upstream Helm repos
+    - "*"
 
   destinations:
     - server: https://kubernetes.default.svc
-      namespace: platform        # Primary namespace for umbrella chart
+      namespace: ingress-nginx
     - server: https://kubernetes.default.svc
-      namespace: kube-system     # metrics-server, external-dns
+      namespace: cert-manager
+    - server: https://kubernetes.default.svc
+      namespace: monitoring
+    - server: https://kubernetes.default.svc
+      namespace: logging
+    - server: https://kubernetes.default.svc
+      namespace: kube-system
     - server: https://kubernetes.default.svc
       namespace: argocd
 
@@ -26,9 +32,3 @@ spec:
   namespaceResourceWhitelist:
     - group: "*"
       kind: "*"
-
-  roles:
-    - name: platform-admin
-      description: Full access to platform project
-      policies:
-        - p, proj:platform:platform-admin, applications, *, platform/*, allow
