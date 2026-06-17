@@ -10,12 +10,12 @@ spec:
   source:
     repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
     targetRevision: HEAD
-    path: .
-    plugin:
-      name: helmfile
+    path: charts/platform-umbrella
+    helm:
+      releaseName: platform
   destination:
     server: https://kubernetes.default.svc
-    namespace: argocd
+    namespace: default
   syncPolicy:
     automated:
       prune: true

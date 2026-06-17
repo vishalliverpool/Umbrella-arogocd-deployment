@@ -1,51 +1,38 @@
 apiVersion: v2
 name: platform-umbrella
-description: |
-  Platform umbrella chart — all 8 components bundled into one Helm release "paas".
-  Deployed as a single ArgoCD Application (paas-app) to the "platform" namespace.
-  Open paas-app in ArgoCD UI to see all 8 components' resources in one view.
+description: Platform infrastructure umbrella chart — all 8 components as subcharts
 type: application
 version: 0.1.0
-appVersion: "1.0.0"
-
 dependencies:
   - name: ingress-nginx
-    version: "4.10.1"
-    repository: https://kubernetes.github.io/ingress-nginx
-    condition: ingress-nginx.enabled
-
+    version: 0.1.0
+    repository: file://./charts/ingress-nginx
+    namespace: ingress-nginx
   - name: cert-manager
-    version: "v1.14.5"
-    repository: https://charts.jetstack.io
-    condition: cert-manager.enabled
-
+    version: 0.1.0
+    repository: file://./charts/cert-manager
+    namespace: cert-manager
   - name: metrics-server
-    version: "3.12.1"
-    repository: https://kubernetes-sigs.github.io/metrics-server/
-    condition: metrics-server.enabled
-
-  - name: kube-prometheus-stack
-    version: "58.5.3"
-    repository: https://prometheus-community.github.io/helm-charts
-    alias: prometheus
-    condition: prometheus.enabled
-
+    version: 0.1.0
+    repository: file://./charts/metrics-server
+    namespace: kube-system
+  - name: prometheus
+    version: 0.1.0
+    repository: file://./charts/prometheus
+    namespace: monitoring
   - name: loki
-    version: "5.47.2"
-    repository: https://grafana.github.io/helm-charts
-    condition: loki.enabled
-
+    version: 0.1.0
+    repository: file://./charts/loki
+    namespace: logging
   - name: grafana
-    version: "7.3.11"
-    repository: https://grafana.github.io/helm-charts
-    condition: grafana.enabled
-
+    version: 0.1.0
+    repository: file://./charts/grafana
+    namespace: monitoring
   - name: promtail
-    version: "6.15.5"
-    repository: https://grafana.github.io/helm-charts
-    condition: promtail.enabled
-
+    version: 0.1.0
+    repository: file://./charts/promtail
+    namespace: logging
   - name: external-dns
-    version: "1.14.5"
-    repository: https://kubernetes-sigs.github.io/external-dns/
-    condition: external-dns.enabled
+    version: 0.1.0
+    repository: file://./charts/external-dns
+    namespace: kube-system

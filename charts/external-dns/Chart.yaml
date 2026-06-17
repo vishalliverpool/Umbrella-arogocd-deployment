@@ -1,9 +1,0 @@
-apiVersion: v2
-name: external-dns
-description: ExternalDNS syncs Kubernetes services to Route53 via IRSA
-type: application
-version: 0.1.0
-dependencies:
-  - name: external-dns
-    version: "1.14.5"
-    repository: https://kubernetes-sigs.github.io/external-dns/

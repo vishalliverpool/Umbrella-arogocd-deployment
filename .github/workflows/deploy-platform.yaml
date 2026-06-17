@@ -42,25 +42,6 @@ jobs:
             --name ${{ env.CLUSTER_NAME }} \
             --region ${{ env.REGION }}
 
-      # ── Apply CMP ConfigMap ─────────────────────────────────────
-      - name: Apply helmfile CMP ConfigMap
-        run: |
-          kubectl apply -f argocd/install/helmfile-cmp.yaml
-          echo "✅ helmfile CMP ConfigMap applied"
-
-      # ── Patch argocd-repo-server with helmfile sidecar ─────────
-      # ArgoCD's built-in copyutil init container already places
-      # argocd-cmp-server at /var/run/argocd — no extra init container needed.
-      - name: Patch argocd-repo-server with helmfile sidecar
-        run: |
-          kubectl patch deployment argocd-repo-server \
-            -n ${{ env.ARGOCD_NS }} \
-            --type=strategic \
-            --patch-file argocd/install/repo-server-patch.yaml
-          kubectl rollout status deployment/argocd-repo-server \
-            -n ${{ env.ARGOCD_NS }} --timeout=180s
-          echo "✅ argocd-repo-server patched and ready"
-
       # ── Apply ArgoCD AppProject first ───────────────────────────
       - name: Apply AppProject (platform)
         run: |
