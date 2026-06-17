@@ -1,15 +1,6 @@
 name: Deploy Platform to ArgoCD
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "argocd/projects/**"
-      - "argocd/apps/**"
-      - "argocd/install/**"
-      - "charts/**"
-      - "helmfile.yaml"
-      - ".github/workflows/deploy-platform.yaml"
   workflow_dispatch:
     inputs:
       force_sync:
