@@ -6,33 +6,33 @@ version: 0.1.0
 dependencies:
   - name: ingress-nginx
     version: 0.1.0
-    repository: file://./ingress-nginx
+    repository: file://./charts/ingress-nginx
     namespace: ingress-nginx
   - name: cert-manager
     version: 0.1.0
-    repository: file://./cert-manager
+    repository: file://./charts/cert-manager
     namespace: cert-manager
   - name: metrics-server
     version: 0.1.0
-    repository: file://./metrics-server
+    repository: file://./charts/metrics-server
     namespace: kube-system
   - name: prometheus
     version: 0.1.0
-    repository: file://./prometheus
+    repository: file://./charts/prometheus
     namespace: monitoring
   - name: loki
     version: 0.1.0
-    repository: file://./loki
+    repository: file://./charts/loki
     namespace: logging
   - name: grafana
     version: 0.1.0
-    repository: file://./grafana
+    repository: file://./charts/grafana
     namespace: monitoring
   - name: promtail
     version: 0.1.0
-    repository: file://./promtail
+    repository: file://./charts/promtail
     namespace: logging
   - name: external-dns
     version: 0.1.0
-    repository: file://./external-dns
+    repository: file://./charts/external-dns
     namespace: kube-system
