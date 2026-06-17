@@ -10,7 +10,7 @@ spec:
   source:
     repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
     targetRevision: HEAD
-    path: charts
+    path: paas-umbrella
     helm:
       releaseName: platform
   destination:
