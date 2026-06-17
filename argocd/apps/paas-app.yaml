@@ -41,7 +41,6 @@ spec:
       releaseName: platform
   destination:
     server: https://kubernetes.default.svc
-    namespace: default
   syncPolicy:
     automated:
       prune: true
@@ -50,3 +49,4 @@ spec:
       - CreateNamespace=true
       - ServerSideApply=true
       - RespectIgnoreDifferences=true
+      - PrunePropagationPolicy=foreground

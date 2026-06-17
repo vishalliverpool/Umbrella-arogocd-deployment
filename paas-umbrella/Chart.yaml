@@ -1,38 +1,30 @@
 apiVersion: v2
 name: platform
-description: Platform infrastructure — all 8 components as Helm subcharts
+description: Platform infrastructure — all 8 components
 type: application
 version: 0.1.0
 dependencies:
   - name: ingress-nginx
-    version: 0.1.0
-    repository: file://./charts/ingress-nginx
-    namespace: ingress-nginx
+    version: "4.10.1"
+    repository: https://kubernetes.github.io/ingress-nginx
   - name: cert-manager
-    version: 0.1.0
-    repository: file://./charts/cert-manager
-    namespace: cert-manager
+    version: "1.14.5"
+    repository: https://charts.jetstack.io
   - name: metrics-server
-    version: 0.1.0
-    repository: file://./charts/metrics-server
-    namespace: kube-system
-  - name: prometheus
-    version: 0.1.0
-    repository: file://./charts/prometheus
-    namespace: monitoring
+    version: "3.12.1"
+    repository: https://kubernetes-sigs.github.io/metrics-server/
+  - name: kube-prometheus-stack
+    version: "58.5.3"
+    repository: https://prometheus-community.github.io/helm-charts
   - name: loki
-    version: 0.1.0
-    repository: file://./charts/loki
-    namespace: logging
+    version: "5.47.2"
+    repository: https://grafana.github.io/helm-charts
   - name: grafana
-    version: 0.1.0
-    repository: file://./charts/grafana
-    namespace: monitoring
+    version: "7.3.11"
+    repository: https://grafana.github.io/helm-charts
   - name: promtail
-    version: 0.1.0
-    repository: file://./charts/promtail
-    namespace: logging
+    version: "6.15.5"
+    repository: https://grafana.github.io/helm-charts
   - name: external-dns
-    version: 0.1.0
-    repository: file://./charts/external-dns
-    namespace: kube-system
+    version: "1.14.5"
+    repository: https://kubernetes-sigs.github.io/external-dns/

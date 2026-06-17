@@ -1,4 +1,4 @@
-# Platform Umbrella — parent chart values for all 8 subcharts
+# Platform infrastructure — parent chart configuration for all 8 upstream charts
 
 ingress-nginx:
   controller:
@@ -31,42 +31,40 @@ metrics-server:
     - --kubelet-use-node-status-port
     - --metric-resolution=15s
 
-prometheus:
-  kube-prometheus-stack:
-    prometheus:
-      prometheusSpec:
-        retention: 15d
-        resources:
-          requests:
-            cpu: 200m
-            memory: 512Mi
-          limits:
-            cpu: 1000m
-            memory: 2Gi
-    grafana:
-      enabled: false
+kube-prometheus-stack:
+  prometheus:
+    prometheusSpec:
+      retention: 15d
+      resources:
+        requests:
+          cpu: 200m
+          memory: 512Mi
+        limits:
+          cpu: 1000m
+          memory: 2Gi
+  grafana:
+    enabled: false
 
 loki:
   loki:
-    loki:
-      auth_enabled: false
-      commonConfig:
-        replication_factor: 1
-      storage:
-        type: filesystem
-    singleBinary:
-      replicas: 1
-    gateway:
+    auth_enabled: false
+    commonConfig:
+      replication_factor: 1
+    storage:
+      type: filesystem
+  singleBinary:
+    replicas: 1
+  gateway:
+    enabled: false
+  monitoring:
+    selfMonitoring:
       enabled: false
-    monitoring:
-      selfMonitoring:
-        enabled: false
-        grafanaAgent:
-          installOperator: false
-      lokiCanary:
-        enabled: false
-    test:
+      grafanaAgent:
+        installOperator: false
+    lokiCanary:
       enabled: false
+  test:
+    enabled: false
 
 grafana:
   replicas: 1
