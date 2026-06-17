@@ -1,0 +1,103 @@
+name: Deploy Platform to ArgoCD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "argocd/projects/**"
+      - "argocd/apps/**"
+      - "charts/**"
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: "Force ArgoCD hard-refresh after apply"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write   # OIDC token for AWS role assumption
+  contents: read
+
+env:
+  CLUSTER_NAME: platform-cluster
+  REGION: us-east-1
+  ARGOCD_NS: argocd
+
+jobs:
+  deploy:
+    name: Apply ArgoCD Manifests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── AWS auth via OIDC (no long-lived keys) ─────────────────
+      # Secret: AWS_ROLE_ARN = arn:aws:iam::218804696766:role/github-actions-deploy
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Update kubeconfig for EKS
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.REGION }}
+
+      # ── Apply ArgoCD AppProject first ───────────────────────────
+      - name: Apply AppProject (platform)
+        run: |
+          kubectl apply -f argocd/projects/platform.yaml
+          echo "✅ AppProject applied"
+
+      # ── Apply the single umbrella Application ───────────────────
+      - name: Apply platform-umbrella Application
+        run: |
+          kubectl apply -f argocd/apps/platform-umbrella.yaml
+          echo "✅ platform-umbrella Application applied"
+
+      # ── Optional: force a hard-refresh via argocd CLI ──────────
+      - name: Force ArgoCD sync (if requested)
+        if: ${{ inputs.force_sync == true }}
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}       # e.g. abc.elb.amazonaws.com
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }} # argocd account generate-token
+        run: |
+          curl -sSL -o argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x argocd
+          ./argocd app sync platform-umbrella \
+            --server "$ARGOCD_SERVER" \
+            --auth-token "$ARGOCD_AUTH_TOKEN" \
+            --insecure \
+            --force \
+            --prune
+
+      # ── Wait up to 5 min for sync to complete ───────────────────
+      - name: Wait for Synced condition
+        run: |
+          echo "⏳ Waiting for platform-umbrella to sync..."
+          kubectl wait application/platform-umbrella \
+            -n ${{ env.ARGOCD_NS }} \
+            --for=jsonpath='{.status.sync.status}'=Synced \
+            --timeout=300s || true
+
+      # ── Print final status ──────────────────────────────────────
+      - name: Show application status
+        if: always()
+        run: |
+          echo ""
+          echo "══════════════════════════════════════════════════"
+          kubectl get application platform-umbrella \
+            -n ${{ env.ARGOCD_NS }} \
+            -o custom-columns=\
+          NAME:.metadata.name,\
+          SYNC:.status.sync.status,\
+          HEALTH:.status.health.status,\
+          MESSAGE:.status.conditions[0].message
+          echo "══════════════════════════════════════════════════"
