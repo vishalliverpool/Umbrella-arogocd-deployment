@@ -1,0 +1,30 @@
+spec:
+  template:
+    spec:
+      volumes:
+        - name: helmfile-cmp-cm
+          configMap:
+            name: helmfile-cmp-cm
+      containers:
+        - name: helmfile-plugin
+          image: ghcr.io/helmfile/helmfile:v0.167.1
+          command: [/var/run/argocd/argocd-cmp-server]
+          env:
+            - name: HELM_CACHE_HOME
+              value: /helm-working-dir
+            - name: HELM_CONFIG_HOME
+              value: /helm-working-dir
+            - name: HELM_DATA_HOME
+              value: /helm-working-dir
+          volumeMounts:
+            - name: var-files
+              mountPath: /var/run/argocd
+            - name: plugins
+              mountPath: /home/argocd/cmp-server/plugins
+            - name: tmp
+              mountPath: /tmp
+            - name: helm-working-dir
+              mountPath: /helm-working-dir
+            - name: helmfile-cmp-cm
+              mountPath: /home/argocd/cmp-server/config/plugin.yaml
+              subPath: plugin.yaml

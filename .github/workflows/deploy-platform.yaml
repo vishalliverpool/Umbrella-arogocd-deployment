@@ -58,77 +58,17 @@ jobs:
           echo "✅ helmfile CMP ConfigMap applied"
 
       # ── Patch argocd-repo-server with helmfile sidecar ─────────
+      # ArgoCD's built-in copyutil init container already places
+      # argocd-cmp-server at /var/run/argocd — no extra init container needed.
       - name: Patch argocd-repo-server with helmfile sidecar
         run: |
-          NS=${{ env.ARGOCD_NS }}
-
-          # Use the same image as the running repo-server for the init container
-          ARGOCD_IMAGE=$(kubectl get deployment argocd-repo-server \
-            -n ${NS} \
-            -o jsonpath='{.spec.template.spec.containers[0].image}')
-          echo "ArgoCD image: ${ARGOCD_IMAGE}"
-
-          cat > /tmp/repo-server-patch.yaml << PATCHEOF
-          spec:
-            template:
-              spec:
-                volumes:
-                  - name: helmfile-cmp-cm
-                    configMap:
-                      name: helmfile-cmp-cm
-                  - name: custom-tools
-                    emptyDir: {}
-                initContainers:
-                  - name: copy-cmp-server
-                    image: ${ARGOCD_IMAGE}
-                    command: [cp, /usr/local/bin/argocd-cmp-server, /custom-tools/argocd-cmp-server]
-                    volumeMounts:
-                      - name: custom-tools
-                        mountPath: /custom-tools
-                containers:
-                  - name: helmfile-plugin
-                    image: ghcr.io/helmfile/helmfile:v0.167.1
-                    command: [/custom-tools/argocd-cmp-server]
-                    securityContext:
-                      runAsNonRoot: true
-                      runAsUser: 999
-                    env:
-                      - name: HELM_CACHE_HOME
-                        value: /helm-working-dir
-                      - name: HELM_CONFIG_HOME
-                        value: /helm-working-dir
-                      - name: HELM_DATA_HOME
-                        value: /helm-working-dir
-                    volumeMounts:
-                      - name: custom-tools
-                        mountPath: /custom-tools
-                      - name: var-files
-                        mountPath: /var/run/argocd
-                      - name: plugins
-                        mountPath: /home/argocd/cmp-server/plugins
-                      - name: tmp
-                        mountPath: /tmp
-                      - name: helm-working-dir
-                        mountPath: /helm-working-dir
-                      - name: helmfile-cmp-cm
-                        mountPath: /home/argocd/cmp-server/config/plugin.yaml
-                        subPath: plugin.yaml
-          PATCHEOF
-
           kubectl patch deployment argocd-repo-server \
-            -n ${NS} \
+            -n ${{ env.ARGOCD_NS }} \
             --type=strategic \
-            --patch-file /tmp/repo-server-patch.yaml
-          echo "✅ argocd-repo-server patched with helmfile sidecar"
-
-      # ── Restart repo-server to pick up the new sidecar ─────────
-      - name: Restart argocd-repo-server
-        run: |
-          kubectl rollout restart deployment/argocd-repo-server \
-            -n ${{ env.ARGOCD_NS }}
+            --patch-file argocd/install/repo-server-patch.yaml
           kubectl rollout status deployment/argocd-repo-server \
             -n ${{ env.ARGOCD_NS }} --timeout=180s
-          echo "✅ argocd-repo-server restarted"
+          echo "✅ argocd-repo-server patched and ready"
 
       # ── Apply ArgoCD AppProject first ───────────────────────────
       - name: Apply AppProject (platform)
