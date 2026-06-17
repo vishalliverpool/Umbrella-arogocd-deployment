@@ -2,11 +2,6 @@
 eksctl/
 bootstrap/
 
-# Helm dependency cache
-charts/**/charts/
-charts/**/*.tgz
-Chart.lock
-
 # Local overrides
 values-local.yaml
 *.local.yaml

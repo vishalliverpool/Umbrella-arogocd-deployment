@@ -1,0 +1,27 @@
+dependencies:
+- name: ingress-nginx
+  repository: file://./charts/ingress-nginx
+  version: 0.1.0
+- name: cert-manager
+  repository: file://./charts/cert-manager
+  version: 0.1.0
+- name: metrics-server
+  repository: file://./charts/metrics-server
+  version: 0.1.0
+- name: prometheus
+  repository: file://./charts/prometheus
+  version: 0.1.0
+- name: loki
+  repository: file://./charts/loki
+  version: 0.1.0
+- name: grafana
+  repository: file://./charts/grafana
+  version: 0.1.0
+- name: promtail
+  repository: file://./charts/promtail
+  version: 0.1.0
+- name: external-dns
+  repository: file://./charts/external-dns
+  version: 0.1.0
+digest: sha256:b3ecb10723f9dee697bac063972b0494ab5111288307507cb4fc21df1447eeb3
+generated: "2026-06-17T13:40:07.8749464+05:30"
