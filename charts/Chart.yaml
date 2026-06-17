@@ -1,38 +1,38 @@
 apiVersion: v2
-name: platform-umbrella
-description: Platform infrastructure umbrella chart — all 8 components as subcharts
+name: platform
+description: Platform infrastructure — all 8 components as Helm subcharts
 type: application
 version: 0.1.0
 dependencies:
   - name: ingress-nginx
     version: 0.1.0
-    repository: file://./charts/ingress-nginx
+    repository: file://./ingress-nginx
     namespace: ingress-nginx
   - name: cert-manager
     version: 0.1.0
-    repository: file://./charts/cert-manager
+    repository: file://./cert-manager
     namespace: cert-manager
   - name: metrics-server
     version: 0.1.0
-    repository: file://./charts/metrics-server
+    repository: file://./metrics-server
     namespace: kube-system
   - name: prometheus
     version: 0.1.0
-    repository: file://./charts/prometheus
+    repository: file://./prometheus
     namespace: monitoring
   - name: loki
     version: 0.1.0
-    repository: file://./charts/loki
+    repository: file://./loki
     namespace: logging
   - name: grafana
     version: 0.1.0
-    repository: file://./charts/grafana
+    repository: file://./grafana
     namespace: monitoring
   - name: promtail
     version: 0.1.0
-    repository: file://./charts/promtail
+    repository: file://./promtail
     namespace: logging
   - name: external-dns
     version: 0.1.0
-    repository: file://./charts/external-dns
+    repository: file://./external-dns
     namespace: kube-system
