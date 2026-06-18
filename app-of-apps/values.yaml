@@ -11,9 +11,172 @@ repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
 targetRevision: HEAD
 
 apps:
-  # ── Microservices only (OCI Helm charts in Amazon ECR) ─────────────────────
-  # Each service is an independent app deployed to the 'microservices' namespace.
-  # Click each in ArgoCD UI to expand and see Deployment, Service, etc.
+  - name: ingress-nginx
+    namespace: ingress-nginx
+    chart: ingress-nginx
+    version: "4.10.1"
+    repo: https://kubernetes.github.io/ingress-nginx
+    values:
+      controller:
+        replicaCount: 2
+        service:
+          type: LoadBalancer
+          annotations:
+            service.beta.kubernetes.io/aws-load-balancer-type: "external"
+            service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+            service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+        metrics:
+          enabled: true
+          serviceMonitor:
+            enabled: false
+
+  - name: cert-manager
+    namespace: cert-manager
+    chart: cert-manager
+    version: "1.14.5"
+    repo: https://charts.jetstack.io
+    values:
+      installCRDs: true
+      resources:
+        requests: {cpu: 50m, memory: 64Mi}
+        limits: {cpu: 200m, memory: 256Mi}
+
+  - name: metrics-server
+    namespace: kube-system
+    chart: metrics-server
+    version: "3.12.1"
+    repo: https://kubernetes-sigs.github.io/metrics-server/
+    values:
+      defaultArgs:
+        - --cert-dir=/tmp
+        - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname
+        - --kubelet-use-node-status-port
+        - --metric-resolution=15s
+
+  - name: kube-prometheus-stack
+    namespace: monitoring
+    chart: kube-prometheus-stack
+    version: "58.5.3"
+    repo: https://prometheus-community.github.io/helm-charts
+    values:
+      prometheus:
+        prometheusSpec:
+          retention: 15d
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: 1000m, memory: 2Gi}
+      grafana:
+        enabled: false
+
+  - name: loki
+    namespace: logging
+    chart: loki
+    version: "5.47.2"
+    repo: https://grafana.github.io/helm-charts
+    values:
+      loki:
+        auth_enabled: false
+        commonConfig: {replication_factor: 1}
+        storage: {type: filesystem}
+      singleBinary: {replicas: 1}
+      gateway: {enabled: false}
+      monitoring:
+        selfMonitoring:
+          enabled: false
+          grafanaAgent: {installOperator: false}
+        lokiCanary: {enabled: false}
+      test: {enabled: false}
+
+  - name: grafana
+    namespace: monitoring
+    chart: grafana
+    version: "7.3.11"
+    repo: https://grafana.github.io/helm-charts
+    values:
+      replicas: 1
+      adminUser: admin
+      adminPassword: "cjbsOWbhOBpQSgTtgcjs"
+      persistence: {enabled: true, storageClassName: gp2, size: 10Gi}
+      resources:
+        requests: {cpu: 100m, memory: 256Mi}
+        limits: {cpu: 500m, memory: 512Mi}
+      datasources:
+        datasources.yaml:
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              url: http://prometheus-operated.monitoring.svc.cluster.local:9090
+              access: proxy
+              isDefault: true
+            - name: Loki
+              type: loki
+              url: http://loki.logging.svc.cluster.local:3100
+              access: proxy
+      dashboardProviders:
+        dashboardproviders.yaml:
+          apiVersion: 1
+          providers:
+            - name: platform
+              orgId: 1
+              folder: Platform
+              type: file
+              disableDeletion: true
+              options:
+                path: /var/lib/grafana/dashboards/platform
+      dashboards:
+        platform:
+          kubernetes-cluster: {gnetId: 7249, revision: 1, datasource: Prometheus}
+          nginx-ingress: {gnetId: 9614, revision: 1, datasource: Prometheus}
+          cert-manager: {gnetId: 11001, revision: 1, datasource: Prometheus}
+          loki-explorer: {gnetId: 13639, revision: 2, datasource: Loki}
+          node-exporter: {gnetId: 1860, revision: 37, datasource: Prometheus}
+      serviceMonitor: {enabled: false}
+
+  - name: promtail
+    namespace: logging
+    chart: promtail
+    version: "6.15.5"
+    repo: https://grafana.github.io/helm-charts
+    values:
+      config:
+        clients:
+          - url: http://loki.logging.svc.cluster.local:3100/loki/api/v1/push
+        snippets:
+          pipelineStages: [{cri: {}}]
+      resources:
+        requests: {cpu: 50m, memory: 64Mi}
+        limits: {cpu: 200m, memory: 128Mi}
+
+  - name: external-dns
+    namespace: kube-system
+    chart: external-dns
+    version: "1.14.5"
+    repo: https://kubernetes-sigs.github.io/external-dns/
+    values:
+      provider: aws
+      aws: {region: us-east-1}
+      txtOwnerId: platform-cluster
+      policy: sync
+      sources: [service, ingress]
+      serviceAccount:
+        create: true
+        annotations:
+          eks.amazonaws.com/role-arn: "arn:aws:iam::218804696766:role/platform-cluster-external-dns"
+      resources:
+        requests: {cpu: 50m, memory: 64Mi}
+        limits: {cpu: 200m, memory: 128Mi}
+
+  # Local manifests (not an upstream chart) — letsencrypt ClusterIssuers.
+  # Depends on cert-manager CRDs; SkipDryRunOnMissingResource lets it retry
+  # cleanly until cert-manager is up.
+  - name: cluster-issuers
+    namespace: cert-manager
+    path: cluster-issuers
+
+  # ── Microservices (OCI Helm charts in Amazon ECR) ──────────────────────────
+  # Each chart is published by its own repo's tag-triggered pipeline, which then
+  # bumps the `version` below. ArgoCD auto-syncs the new release.
   # Auth: handled by the ecr-charts-creds repo-creds secret (see ecr-credentials/).
   - name: orders
     namespace: microservices

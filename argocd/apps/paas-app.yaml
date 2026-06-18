@@ -1,18 +1,24 @@
 apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
-  name: microservices
+  name: paas-infra
   namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
 spec:
-  description: "Microservices — orders, users, payments"
+  description: "Platform infrastructure — all 8 components"
+
   sourceRepos:
     - "*"
+
   destinations:
     - server: https://kubernetes.default.svc
       namespace: "*"
+
   clusterResourceWhitelist:
     - group: "*"
       kind: "*"
+
   namespaceResourceWhitelist:
     - group: "*"
       kind: "*"
@@ -21,18 +27,18 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: application-micro
+  name: paas-app
   namespace: argocd
   finalizers:
     - resources-finalizer.argocd.argoproj.io
 spec:
-  project: microservices
+  project: paas-infra
   source:
     repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
-    targetRevision: main
-    path: microservices-app
+    targetRevision: HEAD
+    path: app-of-apps
     helm:
-      releaseName: microservices
+      releaseName: paas
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd
