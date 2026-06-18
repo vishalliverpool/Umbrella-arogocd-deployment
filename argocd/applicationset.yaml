@@ -1,0 +1,35 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: sinec-apps
+  namespace: argocd
+spec:
+  goTemplate: true
+  goTemplateOptions: ["missingkey=error"]
+  generators:
+    # Auto-discover every chart folder under services/ — add a folder, get an app.
+    - git:
+        repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
+        revision: main
+        directories:
+          - path: services/*
+  template:
+    metadata:
+      name: '{{.path.basename}}'        # orders / users / payments
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
+        targetRevision: main
+        path: '{{.path.path}}'           # services/<name>
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: sinec-app
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

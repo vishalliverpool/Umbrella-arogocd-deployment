@@ -1,7 +1,7 @@
 name: sync-charts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# App-of-Apps release pipeline.
+# Release pipeline — feeds the ArgoCD ApplicationSet.
 #
 # Trigger:  push a tag like  release-1.0.4
 #
@@ -10,10 +10,12 @@ name: sync-charts
 #   discover  → find the latest chart version of each service in ECR
 #   pull      → fetch each chart from ECR and unpack it INTO the repo (services/<svc>)
 #   validate  → render each chart locally (fail if broken)
-#   publish   → commit + push the unpacked charts  ← ArgoCD parent auto-syncs
+#   publish   → commit + push the unpacked charts
 #
-# ArgoCD child apps point at git (services/<svc>) — never at ECR.
-# ECR is only used here (to fetch the chart) and by the nodes (to pull images).
+# The ApplicationSet (argocd/applicationset.yaml) watches services/* and generates
+# one ArgoCD app per folder. Pushing the charts here is what drives a deploy.
+# ArgoCD apps point at git (services/<svc>) — never at ECR; ECR is used only here
+# (to fetch the chart) and by the nodes (to pull images).
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
