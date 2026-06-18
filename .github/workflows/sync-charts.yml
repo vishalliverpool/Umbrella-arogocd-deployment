@@ -1,135 +1,81 @@
 name: sync-charts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Release pipeline — feeds the ArgoCD ApplicationSet.
+# Deployment pipeline — triggered by service pipelines after pushing to ECR.
 #
-# Trigger:  push a tag like  release-1.0.4  (or run manually)
+# Trigger:  repository_dispatch (event: chart-pushed) from a service pipeline
+#           Payload: { "service": "payments", "version": "1.0.5" }
+#           Also triggerable manually via workflow_dispatch.
 #
 # Steps:
-#   1. auth-aws        → OIDC to AWS
-#   2. ecr-credentials → Docker + Helm login to ECR
-#   3. check-versions  → query ECR for latest chart version per service
-#   4. update-config   → write version into services/<svc>/config.yaml
-#   5. commit-config   → commit the tiny config files to main
-#   6. verify          → print the release summary (last step — no git here)
+#   1. resolve  → read service + version from dispatch payload or manual input
+#   2. update   → write version into services/<svc>/config.yaml
+#   3. commit   → commit the config change to main
+#   4. verify   → print deploy summary
 #
 # ArgoCD ApplicationSet watches services/*/config.yaml (git-files generator).
 # It pulls Helm charts directly from ECR OCI using the version in config.yaml.
-# No chart directories are stored in this repo — only the version config.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
-  push:
-    tags:
-      - "release-*"
+  repository_dispatch:
+    types: [chart-pushed]
   workflow_dispatch:
     inputs:
-      services:
-        description: "Space-separated list of services to release"
-        required: false
-        default: "orders users payments"
+      service:
+        description: "Service to deploy (orders, users, payments)"
+        required: true
+      version:
+        description: "Chart version to deploy"
+        required: true
 
 env:
-  AWS_REGION: us-east-1
   REGISTRY: 218804696766.dkr.ecr.us-east-1.amazonaws.com
-  ROLE_ARN: arn:aws:iam::218804696766:role/github-actions-deploy
-  SERVICES: ${{ github.event.inputs.services || 'orders users payments' }}
 
 permissions:
-  contents: write   # push config updates to main
-  id-token: write   # OIDC
+  contents: write
 
 jobs:
-  release:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
 
-      - uses: azure/setup-helm@v4
-        with:
-          version: v3.14.4
-
-      - name: Install yq
+      # ── 1. Resolve service + version from payload or manual input ────────────
+      - name: Resolve service and version
         run: |
-          curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64 \
-            -o /usr/local/bin/yq
-          chmod +x /usr/local/bin/yq
-          yq --version
+          SERVICE="${{ github.event.client_payload.service || github.event.inputs.service }}"
+          VERSION="${{ github.event.client_payload.version || github.event.inputs.version }}"
+          if [ -z "$SERVICE" ] || [ -z "$VERSION" ]; then
+            echo "::error::service and version are required"
+            exit 1
+          fi
+          echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Deploying $SERVICE @ $VERSION"
 
-      # ── 1. Auth to AWS ─────────────────────────────────────────────────────
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      # ── 2. ECR Credentials (Docker + Helm) ─────────────────────────────────
-      - name: Setup ECR credentials
+      # ── 2. Update services/<svc>/config.yaml ────────────────────────────────
+      - name: Update version config
         run: |
-          ECR_TOKEN=$(aws ecr get-login-password --region "$AWS_REGION")
+          sed -i "s/version: .*/version: \"$VERSION\"/" "services/$SERVICE/config.yaml"
+          echo "Updated services/$SERVICE/config.yaml → version: $VERSION"
 
-          # Helm login — used by ArgoCD OCI pulls and any local helm commands
-          echo "$ECR_TOKEN" | helm registry login \
-            --username AWS --password-stdin "$REGISTRY"
-
-          # Docker login — used if the pipeline ever needs to inspect images
-          echo "$ECR_TOKEN" | docker login \
-            --username AWS --password-stdin "$REGISTRY"
-
-          echo "ECR credentials configured for $REGISTRY"
-
-      # ── 3. Check latest chart version per service in ECR ───────────────────
-      - name: Check latest versions in ECR
-        run: |
-          set -euo pipefail
-          SUMMARY=""
-          for svc in $SERVICES; do
-            LATEST=$(aws ecr describe-images \
-              --repository-name "charts/$svc" \
-              --region "$AWS_REGION" \
-              --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
-              --output text 2>/dev/null || echo "None")
-
-            if [ -z "$LATEST" ] || [ "$LATEST" = "None" ]; then
-              echo "::error title=Missing chart::No chart in ECR for '$svc'. Run the $svc release pipeline first."
-              exit 1
-            fi
-            echo "::notice title=$svc::Latest chart version = $LATEST"
-            SUMMARY="$SUMMARY $svc=$LATEST"
-          done
-          echo "VERSIONS_SUMMARY=$SUMMARY" >> "$GITHUB_ENV"
-
-      # ── 4. Update services/<svc>/config.yaml with the latest version ────────
-      - name: Update version config files
-        run: |
-          set -euo pipefail
-          for svc in $SERVICES; do
-            LATEST=$(echo "$VERSIONS_SUMMARY" | grep -oP "(?<=$svc=)\S+")
-            yq eval -i ".version = \"$LATEST\"" "services/$svc/config.yaml"
-            echo "Updated services/$svc/config.yaml → version: $LATEST"
-          done
-
-      # ── 5. Commit updated config to main ────────────────────────────────────
+      # ── 3. Commit to main ───────────────────────────────────────────────────
       - name: Commit version config to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add services/*/config.yaml
-          git diff --cached --quiet || git commit -m "release:$VERSIONS_SUMMARY"
+          git add "services/$SERVICE/config.yaml"
+          git diff --cached --quiet || git commit -m "release: $SERVICE=$VERSION"
           git push origin main
 
-      # ── 6. Verify — summarise what was released (no git, no AWS calls) ──────
-      - name: Verify release
+      # ── 4. Verify ───────────────────────────────────────────────────────────
+      - name: Verify
         run: |
           echo "════════════════════════════════════════"
           echo "  Release complete"
+          echo "  $SERVICE → $VERSION"
+          echo "  ArgoCD will sync: oci://$REGISTRY/charts/$SERVICE:$VERSION"
           echo "════════════════════════════════════════"
-          for svc in $SERVICES; do
-            LATEST=$(echo "$VERSIONS_SUMMARY" | grep -oP "(?<=$svc=)\S+")
-            echo "  $svc  →  $LATEST"
-            echo "  ArgoCD will sync: oci://$REGISTRY/charts/$svc:$LATEST"
-          done
-          echo "════════════════════════════════════════"
-          echo "ArgoCD ApplicationSet auto-detects the config change and deploys."
