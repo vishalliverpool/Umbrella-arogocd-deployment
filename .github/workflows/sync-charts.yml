@@ -3,19 +3,19 @@ name: sync-charts
 # ─────────────────────────────────────────────────────────────────────────────
 # Release pipeline — feeds the ArgoCD ApplicationSet.
 #
-# Trigger:  push a tag like  release-1.0.4
+# Trigger:  push a tag like  release-1.0.4  (or run manually)
 #
-# One job, sequential steps:
-#   auth      → log in to AWS (OIDC) + ECR
-#   discover  → find the latest chart version of each service in ECR
-#   pull      → fetch each chart from ECR and unpack it INTO the repo (services/<svc>)
-#   validate  → render each chart locally (fail if broken)
-#   publish   → commit + push the unpacked charts
+# Steps:
+#   1. auth-aws        → OIDC to AWS
+#   2. ecr-credentials → Docker + Helm login to ECR
+#   3. check-versions  → query ECR for latest chart version per service
+#   4. update-config   → write version into services/<svc>/config.yaml
+#   5. commit-config   → commit the tiny config files to main
+#   6. verify          → print the release summary (last step — no git here)
 #
-# The ApplicationSet (argocd/applicationset.yaml) watches services/* and generates
-# one ArgoCD app per folder. Pushing the charts here is what drives a deploy.
-# ArgoCD apps point at git (services/<svc>) — never at ECR; ECR is used only here
-# (to fetch the chart) and by the nodes (to pull images).
+# ArgoCD ApplicationSet watches services/*/config.yaml (git-files generator).
+# It pulls Helm charts directly from ECR OCI using the version in config.yaml.
+# No chart directories are stored in this repo — only the version config.
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -31,8 +31,8 @@ env:
   SERVICES: "orders users payments"
 
 permissions:
-  contents: write     # to push the unpacked charts
-  id-token: write      # OIDC
+  contents: write   # push config updates to main
+  id-token: write   # OIDC
 
 jobs:
   release:
@@ -46,25 +46,39 @@ jobs:
         with:
           version: v3.14.4
 
-      # ── auth ──────────────────────────────────────────────────────────────
+      - name: Install yq
+        run: |
+          curl -sL https://github.com/mikefarah/yq/releases/download/v4.44.1/yq_linux_amd64 \
+            -o /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+      # ── 1. Auth to AWS ─────────────────────────────────────────────────────
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Helm login to ECR
+      # ── 2. ECR Credentials (Docker + Helm) ─────────────────────────────────
+      - name: Setup ECR credentials
         run: |
-          aws ecr get-login-password --region "$AWS_REGION" \
-            | helm registry login --username AWS --password-stdin "$REGISTRY"
+          ECR_TOKEN=$(aws ecr get-login-password --region "$AWS_REGION")
 
-      # ── pull latest chart per service + validate ────────────────────────────
-      # Each service independently gets its OWN newest chart from ECR, so services
-      # on different versions (orders 1.0.5, users 1.0.3) are all handled correctly.
-      - name: Pull latest chart per service from ECR into the repo
+          # Helm login — used by ArgoCD OCI pulls and any local helm commands
+          echo "$ECR_TOKEN" | helm registry login \
+            --username AWS --password-stdin "$REGISTRY"
+
+          # Docker login — used if the pipeline ever needs to inspect images
+          echo "$ECR_TOKEN" | docker login \
+            --username AWS --password-stdin "$REGISTRY"
+
+          echo "ECR credentials configured for $REGISTRY"
+
+      # ── 3. Check latest chart version per service in ECR ───────────────────
+      - name: Check latest versions in ECR
         run: |
           set -euo pipefail
-
           SUMMARY=""
           for svc in $SERVICES; do
             LATEST=$(aws ecr describe-images \
@@ -77,28 +91,41 @@ jobs:
               echo "::error title=Missing chart::No chart in ECR for '$svc'. Run the $svc release pipeline first."
               exit 1
             fi
-            echo "::notice title=$svc::$LATEST"
-
-            # Replace the committed chart with the freshly pulled latest one
-            rm -rf "services/$svc"
-            mkdir -p services
-            helm pull "oci://$REGISTRY/charts/$svc" --version "$LATEST" --untar --untardir services
-
-            # Render it — proves the chart is deployable before it is committed
-            helm template "$svc" "services/$svc" > /dev/null
-
+            echo "::notice title=$svc::Latest chart version = $LATEST"
             SUMMARY="$SUMMARY $svc=$LATEST"
           done
+          echo "VERSIONS_SUMMARY=$SUMMARY" >> "$GITHUB_ENV"
 
-          echo "SUMMARY=$SUMMARY" >> "$GITHUB_ENV"
-          echo "✅ Charts pulled into repo and validated:$SUMMARY"
+      # ── 4. Update services/<svc>/config.yaml with the latest version ────────
+      - name: Update version config files
+        run: |
+          set -euo pipefail
+          for svc in $SERVICES; do
+            LATEST=$(echo "$VERSIONS_SUMMARY" | grep -oP "(?<=$svc=)\S+")
+            yq eval -i ".version = \"$LATEST\"" "services/$svc/config.yaml"
+            echo "Updated services/$svc/config.yaml → version: $LATEST"
+          done
 
-      # ── publish (no git commands — action commits & pushes for us) ───────────
-      - name: Commit unpacked charts to main
+      # ── 5. Commit updated config to main ────────────────────────────────────
+      - name: Commit version config to main
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "release —${{ env.SUMMARY }}"
-          file_pattern: services/**
+          commit_message: "release:${{ env.VERSIONS_SUMMARY }}"
+          file_pattern: services/*/config.yaml
           commit_user_name: github-actions[bot]
           commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
           branch: main
+
+      # ── 6. Verify — summarise what was released (no git, no AWS calls) ──────
+      - name: Verify release
+        run: |
+          echo "════════════════════════════════════════"
+          echo "  Release complete"
+          echo "════════════════════════════════════════"
+          for svc in $SERVICES; do
+            LATEST=$(echo "$VERSIONS_SUMMARY" | grep -oP "(?<=$svc=)\S+")
+            echo "  $svc  →  $LATEST"
+            echo "  ArgoCD will sync: oci://$REGISTRY/charts/$svc:$LATEST"
+          done
+          echo "════════════════════════════════════════"
+          echo "ArgoCD ApplicationSet auto-detects the config change and deploys."

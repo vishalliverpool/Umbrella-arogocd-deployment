@@ -1,17 +1,24 @@
 # ArgoCD Helm values — used by bootstrap/02-install-argocd.sh
-# Exposes the ArgoCD API/UI server through an AWS Network Load Balancer (ELB).
+# Exposes the ArgoCD API/UI server through an AWS Application Load Balancer (ALB)
+# provisioned by the AWS Load Balancer Controller from the Ingress below.
 configs:
   params:
-    # Serve plain HTTP behind the LB (TLS terminates at the client / add ACM later).
+    # Serve plain HTTP behind the ALB (ALB terminates / add ACM cert later).
     server.insecure: true
 
 server:
+  # Backend stays internal; the ALB Ingress is the public entry point.
   service:
-    type: LoadBalancer
+    type: ClusterIP
+  ingress:
+    enabled: true
+    ingressClassName: alb
     annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: "external"
-      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
-      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+      alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    hosts: []   # no host constraint — ALB accepts requests from any hostname/IP
 
 # Keep the footprint small for a single-cluster platform.
 dex:
