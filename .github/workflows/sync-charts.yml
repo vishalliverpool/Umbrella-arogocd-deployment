@@ -1,16 +1,19 @@
 name: sync-charts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Release pipeline for the bundled "sinec-app" umbrella chart.
+# App-of-Apps release pipeline.
 #
 # Trigger:  push a tag like  release-1.0.4
 #
 # One job, sequential steps:
-#   auth      → log in to AWS (OIDC)
+#   auth      → log in to AWS (OIDC) + ECR
 #   discover  → find the latest chart version of each service in ECR
-#   update    → write those versions into sinec-app/Chart.yaml (on the runner)
-#   validate  → pull the charts + render the bundle (fail if not deployable)
-#   publish   → commit + push the updated file to GitHub  ← ArgoCD auto-syncs
+#   pull      → fetch each chart from ECR and unpack it INTO the repo (services/<svc>)
+#   validate  → render each chart locally (fail if broken)
+#   publish   → commit + push the unpacked charts  ← ArgoCD parent auto-syncs
+#
+# ArgoCD child apps point at git (services/<svc>) — never at ECR.
+# ECR is only used here (to fetch the chart) and by the nodes (to pull images).
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -26,7 +29,7 @@ env:
   SERVICES: "orders users payments"
 
 permissions:
-  contents: write     # to push the updated Chart.yaml
+  contents: write     # to push the unpacked charts
   id-token: write      # OIDC
 
 jobs:
@@ -58,16 +61,10 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" \
             | helm registry login --username AWS --password-stdin "$REGISTRY"
 
-      # ── discover + update ───────────────────────────────────────────────────
-      - name: Resolve latest versions from ECR and update Chart.yaml
+      # ── discover + pull + validate ──────────────────────────────────────────
+      - name: Pull latest charts from ECR into the repo
         run: |
           set -euo pipefail
-
-          # Umbrella version from the release tag: release-1.0.4 → 1.0.4
-          UMBRELLA="${GITHUB_REF_NAME#release-}"
-          echo "UMBRELLA=$UMBRELLA" >> "$GITHUB_ENV"
-          echo "::notice title=Umbrella version::$UMBRELLA"
-          yq eval -i ".version = \"$UMBRELLA\"" sinec-app/Chart.yaml
 
           SUMMARY=""
           for svc in $SERVICES; do
@@ -81,33 +78,28 @@ jobs:
               echo "::error title=Missing chart::No chart in ECR for '$svc'. Run the $svc release pipeline first."
               exit 1
             fi
-
             echo "::notice title=$svc::$LATEST"
-            yq eval -i "(.dependencies[] | select(.name == \"$svc\") | .version) = \"$LATEST\"" sinec-app/Chart.yaml
+
+            # Replace the committed chart with the freshly pulled one
+            rm -rf "services/$svc"
+            mkdir -p services
+            helm pull "oci://$REGISTRY/charts/$svc" --version "$LATEST" --untar --untardir services
+
+            # Render it — proves the chart is deployable before it is committed
+            helm template "$svc" "services/$svc" > /dev/null
+
             SUMMARY="$SUMMARY $svc=$LATEST"
           done
 
           echo "SUMMARY=$SUMMARY" >> "$GITHUB_ENV"
-          echo "── Updated Chart.yaml ──"
-          cat sinec-app/Chart.yaml
+          echo "✅ Charts pulled into repo and validated:$SUMMARY"
 
-      # ── validate (precheck before it can reach the cluster) ─────────────────
-      - name: Pull subcharts and render the bundle
-        run: |
-          set -euo pipefail
-          helm dependency build sinec-app
-          helm lint sinec-app
-          helm template sinec-app > /dev/null
-          echo "✅ Bundle builds, lints and renders cleanly"
-
-      # ── publish (copy the updated file to GitHub → ArgoCD auto-syncs) ────────
-      # No git commands — this action commits & pushes the changed file for us,
-      # using the built-in GITHUB_TOKEN. If nothing changed it does nothing.
-      - name: Commit updated Chart.yaml to main
+      # ── publish (no git commands — action commits & pushes for us) ───────────
+      - name: Commit unpacked charts to main
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "release ${{ env.UMBRELLA }} —${{ env.SUMMARY }}"
-          file_pattern: sinec-app/Chart.yaml
+          commit_message: "release —${{ env.SUMMARY }}"
+          file_pattern: services/**
           commit_user_name: github-actions[bot]
           commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
           branch: main

@@ -1,0 +1,24 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: orders
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    # Chart lives in THIS git repo. The sync-charts pipeline pulls the latest
+    # chart from ECR and unpacks it into services/orders, then commits.
+    repoURL: https://github.com/vishalliverpool/Umbrella-arogocd-deployment.git
+    targetRevision: main
+    path: services/orders
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sinec-app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
