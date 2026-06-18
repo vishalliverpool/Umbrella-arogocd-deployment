@@ -59,23 +59,23 @@ jobs:
               echo "  ✅ Found: $LATEST"
             fi
 
-            # Update app-of-apps/values.yaml with the version
-            echo "  Updating app-of-apps/values.yaml..."
-            yq eval -i "(.apps[] | select(.name == \"$svc\") | .version) = \"$LATEST\"" app-of-apps/values.yaml
+            # Bump the dependency version in the single bundled chart (sinec-app)
+            echo "  Updating sinec-app/Chart.yaml dependency '$svc'..."
+            yq eval -i "(.dependencies[] | select(.name == \"$svc\") | .version) = \"$LATEST\"" sinec-app/Chart.yaml
           done
 
           echo ""
           echo "=========================================="
-          echo "Updated values:"
+          echo "Updated sinec-app/Chart.yaml dependencies:"
           echo "=========================================="
-          grep -A 2 "name: orders\|name: users\|name: payments" app-of-apps/values.yaml | head -30
+          yq eval '.dependencies' sinec-app/Chart.yaml
 
       - name: Commit and push to main (triggers ArgoCD sync)
         run: |
           git config user.name "chart-sync-bot"
           git config user.email "chart-sync-bot@users.noreply.github.com"
 
-          git add app-of-apps/values.yaml
+          git add sinec-app/Chart.yaml
 
           if git diff --cached --quiet; then
             echo "✓ No changes to commit"

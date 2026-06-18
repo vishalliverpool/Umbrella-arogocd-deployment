@@ -1,0 +1,7 @@
+# Per-service overrides go under the subchart name. Defaults (in each chart)
+# are already correct (ECR image, 2 replicas), so this can stay minimal.
+#
+# orders:
+#   replicaCount: 3
+# users: {}
+# payments: {}
