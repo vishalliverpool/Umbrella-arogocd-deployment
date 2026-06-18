@@ -58,8 +58,10 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" \
             | helm registry login --username AWS --password-stdin "$REGISTRY"
 
-      # ── discover + pull + validate ──────────────────────────────────────────
-      - name: Pull latest charts from ECR into the repo
+      # ── pull latest chart per service + validate ────────────────────────────
+      # Each service independently gets its OWN newest chart from ECR, so services
+      # on different versions (orders 1.0.5, users 1.0.3) are all handled correctly.
+      - name: Pull latest chart per service from ECR into the repo
         run: |
           set -euo pipefail
 
@@ -77,7 +79,7 @@ jobs:
             fi
             echo "::notice title=$svc::$LATEST"
 
-            # Replace the committed chart with the freshly pulled one
+            # Replace the committed chart with the freshly pulled latest one
             rm -rf "services/$svc"
             mkdir -p services
             helm pull "oci://$REGISTRY/charts/$svc" --version "$LATEST" --untar --untardir services
