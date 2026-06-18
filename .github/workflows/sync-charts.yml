@@ -5,11 +5,12 @@ name: sync-charts
 #
 # Trigger:  push a tag like  release-1.0.4
 #
-#   1. discover  → auth to AWS, find the latest chart version of each service in ECR
-#   2. validate  → pull those OCI charts and render the bundle (fail if not deployable)
-#   3. release   → commit the validated Chart.yaml to main → ArgoCD auto-syncs
-#
-# Nothing is committed unless the bundle provably builds and renders.
+# One job, sequential steps:
+#   auth      → log in to AWS (OIDC)
+#   discover  → find the latest chart version of each service in ECR
+#   update    → write those versions into sinec-app/Chart.yaml (on the runner)
+#   validate  → pull the charts + render the bundle (fail if not deployable)
+#   publish   → commit + push the updated file to GitHub  ← ArgoCD auto-syncs
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
@@ -25,64 +26,11 @@ env:
   SERVICES: "orders users payments"
 
 permissions:
-  contents: read      # only the release job needs write; it elevates locally
-  id-token: write     # OIDC
+  contents: write     # to push the updated Chart.yaml
+  id-token: write      # OIDC
 
 jobs:
-
-  # ── 1. DISCOVER ────────────────────────────────────────────────────────────
-  # Authenticate to AWS and resolve the latest chart version of every service.
-  # Read-only: fails fast if a service has no chart in ECR.
-  discover:
-    runs-on: ubuntu-latest
-    outputs:
-      umbrella: ${{ steps.resolve.outputs.umbrella }}
-      orders:   ${{ steps.resolve.outputs.orders }}
-      users:    ${{ steps.resolve.outputs.users }}
-      payments: ${{ steps.resolve.outputs.payments }}
-      summary:  ${{ steps.resolve.outputs.summary }}
-    steps:
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Resolve latest chart versions from ECR
-        id: resolve
-        run: |
-          set -euo pipefail
-
-          # Umbrella version comes from the release tag: release-1.0.4 → 1.0.4
-          UMBRELLA="${GITHUB_REF_NAME#release-}"
-          echo "umbrella=$UMBRELLA" >> "$GITHUB_OUTPUT"
-          echo "::notice title=Umbrella version::$UMBRELLA"
-
-          SUMMARY=""
-          for svc in $SERVICES; do
-            LATEST=$(aws ecr describe-images \
-              --repository-name "charts/$svc" \
-              --region "$AWS_REGION" \
-              --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
-              --output text 2>/dev/null || echo "None")
-
-            if [ -z "$LATEST" ] || [ "$LATEST" = "None" ]; then
-              echo "::error title=Missing chart::No chart found in ECR for '$svc'. Run the $svc service release pipeline first."
-              exit 1
-            fi
-
-            echo "$svc=$LATEST" >> "$GITHUB_OUTPUT"
-            SUMMARY="$SUMMARY $svc=$LATEST"
-            echo "::notice title=$svc::$LATEST"
-          done
-
-          echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
-
-  # ── 2. VALIDATE ────────────────────────────────────────────────────────────
-  # Apply the resolved versions to a throwaway copy, pull the OCI subcharts and
-  # render them. This proves the bundle is deployable BEFORE anything is committed.
-  validate:
-    needs: discover
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -98,6 +46,7 @@ jobs:
         with:
           version: v3.14.4
 
+      # ── auth ──────────────────────────────────────────────────────────────
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -109,65 +58,62 @@ jobs:
           aws ecr get-login-password --region "$AWS_REGION" \
             | helm registry login --username AWS --password-stdin "$REGISTRY"
 
-      - name: Apply resolved versions to Chart.yaml
+      # ── discover + update ───────────────────────────────────────────────────
+      - name: Resolve latest versions from ECR and update Chart.yaml
         run: |
           set -euo pipefail
-          yq eval -i ".version = \"${{ needs.discover.outputs.umbrella }}\"" sinec-app/Chart.yaml
-          yq eval -i "(.dependencies[] | select(.name == \"orders\")   | .version) = \"${{ needs.discover.outputs.orders }}\""   sinec-app/Chart.yaml
-          yq eval -i "(.dependencies[] | select(.name == \"users\")    | .version) = \"${{ needs.discover.outputs.users }}\""    sinec-app/Chart.yaml
-          yq eval -i "(.dependencies[] | select(.name == \"payments\") | .version) = \"${{ needs.discover.outputs.payments }}\"" sinec-app/Chart.yaml
-          echo "── Resolved Chart.yaml ──"
+
+          # Umbrella version from the release tag: release-1.0.4 → 1.0.4
+          UMBRELLA="${GITHUB_REF_NAME#release-}"
+          echo "UMBRELLA=$UMBRELLA" >> "$GITHUB_ENV"
+          echo "::notice title=Umbrella version::$UMBRELLA"
+          yq eval -i ".version = \"$UMBRELLA\"" sinec-app/Chart.yaml
+
+          SUMMARY=""
+          for svc in $SERVICES; do
+            LATEST=$(aws ecr describe-images \
+              --repository-name "charts/$svc" \
+              --region "$AWS_REGION" \
+              --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
+              --output text 2>/dev/null || echo "None")
+
+            if [ -z "$LATEST" ] || [ "$LATEST" = "None" ]; then
+              echo "::error title=Missing chart::No chart in ECR for '$svc'. Run the $svc release pipeline first."
+              exit 1
+            fi
+
+            echo "::notice title=$svc::$LATEST"
+            yq eval -i "(.dependencies[] | select(.name == \"$svc\") | .version) = \"$LATEST\"" sinec-app/Chart.yaml
+            SUMMARY="$SUMMARY $svc=$LATEST"
+          done
+
+          echo "SUMMARY=$SUMMARY" >> "$GITHUB_ENV"
+          echo "── Updated Chart.yaml ──"
           cat sinec-app/Chart.yaml
 
-      - name: Pull subcharts + render (this is the precheck)
+      # ── validate (precheck before it can reach the cluster) ─────────────────
+      - name: Pull subcharts and render the bundle
         run: |
           set -euo pipefail
-          helm dependency build sinec-app    # pulls the 3 OCI charts at the pinned versions
-          helm lint sinec-app                # static checks
-          helm template sinec-app > /dev/null # full render — fails if anything is broken
+          helm dependency build sinec-app
+          helm lint sinec-app
+          helm template sinec-app > /dev/null
           echo "✅ Bundle builds, lints and renders cleanly"
 
-      - name: Upload validated chart
-        uses: actions/upload-artifact@v4
-        with:
-          name: validated-chart
-          path: |
-            sinec-app/Chart.yaml
-            sinec-app/Chart.lock
-          if-no-files-found: warn
-          retention-days: 7
-
-  # ── 3. RELEASE ─────────────────────────────────────────────────────────────
-  # Commit exactly what was validated. The push to main is what ArgoCD watches.
-  release:
-    needs: [discover, validate]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-
-      - name: Download validated chart
-        uses: actions/download-artifact@v4
-        with:
-          name: validated-chart
-          path: sinec-app
-
-      - name: Commit and push (triggers ArgoCD sync)
+      # ── publish (copy the updated file to GitHub → ArgoCD auto-syncs) ────────
+      - name: Commit and push to main
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add sinec-app/Chart.yaml sinec-app/Chart.lock || git add sinec-app/Chart.yaml
+          git add sinec-app/Chart.yaml
 
           if git diff --cached --quiet; then
-            echo "✓ Nothing changed — chart already at these versions"
+            echo "✓ Nothing changed — already at these versions"
             exit 0
           fi
 
-          git commit -m "release ${{ needs.discover.outputs.umbrella }} —${{ needs.discover.outputs.summary }}"
+          git commit -m "release $UMBRELLA —$SUMMARY"
           git push origin main
-          echo "✅ Pushed to main — ArgoCD will sync the cluster shortly"
+          echo "✅ Pushed to main — ArgoCD will auto-sync the cluster"
