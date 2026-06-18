@@ -1,0 +1,83 @@
+# ──────────────────────────────────────────────────────────────────────────
+# ECR → ArgoCD credential refresher
+# ECR auth tokens expire every 12h, so a CronJob re-mints the ArgoCD
+# `repo-creds` secret that lets the repo-server pull OCI Helm charts from ECR.
+# Uses the node IAM role (AmazonEC2ContainerRegistryReadOnly already grants
+# ecr:GetAuthorizationToken) — no IRSA required.
+# ──────────────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ecr-cred-refresher
+  namespace: argocd
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ecr-cred-refresher
+  namespace: argocd
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ecr-cred-refresher
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ecr-cred-refresher
+subjects:
+  - kind: ServiceAccount
+    name: ecr-cred-refresher
+    namespace: argocd
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ecr-cred-refresher
+  namespace: argocd
+spec:
+  schedule: "0 */8 * * *"        # every 8 hours (token lives 12h)
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: ecr-cred-refresher
+          restartPolicy: OnFailure
+          containers:
+            - name: refresh
+              image: amazon/aws-cli:2.15.0
+              env:
+                - name: AWS_REGION
+                  value: us-east-1
+                - name: REGISTRY
+                  value: 218804696766.dkr.ecr.us-east-1.amazonaws.com
+              command: ["/bin/sh", "-c"]
+              args:
+                - |
+                  set -e
+                  curl -sLo /tmp/kubectl https://dl.k8s.io/release/v1.33.0/bin/linux/amd64/kubectl
+                  chmod +x /tmp/kubectl
+                  TOKEN=$(aws ecr get-login-password --region "$AWS_REGION")
+                  cat <<EOF | /tmp/kubectl apply -f -
+                  apiVersion: v1
+                  kind: Secret
+                  metadata:
+                    name: ecr-charts-creds
+                    namespace: argocd
+                    labels:
+                      argocd.argoproj.io/secret-type: repo-creds
+                  stringData:
+                    type: helm
+                    url: $REGISTRY
+                    enableOCI: "true"
+                    username: AWS
+                    password: $TOKEN
+                  EOF
+                  echo "ECR repo-creds refreshed."

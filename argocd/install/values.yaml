@@ -1,0 +1,22 @@
+# ArgoCD Helm values — used by bootstrap/02-install-argocd.sh
+# Exposes the ArgoCD API/UI server through an AWS Network Load Balancer (ELB).
+configs:
+  params:
+    # Serve plain HTTP behind the LB (TLS terminates at the client / add ACM later).
+    server.insecure: true
+
+server:
+  service:
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: "external"
+      service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"
+      service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+
+# Keep the footprint small for a single-cluster platform.
+dex:
+  enabled: false
+notifications:
+  enabled: false
+applicationSet:
+  enabled: false

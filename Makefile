@@ -23,9 +23,9 @@ cluster:
 argocd:
 	@bash bootstrap/02-install-argocd.sh
 
-## ── Step 3: Deploy paas-app (App-of-Apps) via ArgoCD ─────────
+## ── Step 3: Seed ECR creds + deploy paas-app (App-of-Apps) ───
 deploy:
-	kubectl apply -f argocd/apps/paas-app.yaml
+	@bash bootstrap/03-deploy-platform.sh
 
 ## ── Get ArgoCD credentials (run after 'make argocd') ─────────
 get-argocd:

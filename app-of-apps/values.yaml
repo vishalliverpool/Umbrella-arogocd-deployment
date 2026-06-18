@@ -173,3 +173,25 @@ apps:
   - name: cluster-issuers
     namespace: cert-manager
     path: cluster-issuers
+
+  # ── Microservices (OCI Helm charts in Amazon ECR) ──────────────────────────
+  # Each chart is published by its own repo's tag-triggered pipeline, which then
+  # bumps the `version` below. ArgoCD auto-syncs the new release.
+  # Auth: handled by the ecr-charts-creds repo-creds secret (see ecr-credentials/).
+  - name: orders
+    namespace: microservices
+    chart: orders
+    version: "1.0.0"
+    repo: 218804696766.dkr.ecr.us-east-1.amazonaws.com/charts
+
+  - name: users
+    namespace: microservices
+    chart: users
+    version: "1.0.0"
+    repo: 218804696766.dkr.ecr.us-east-1.amazonaws.com/charts
+
+  - name: payments
+    namespace: microservices
+    chart: payments
+    version: "1.0.0"
+    repo: 218804696766.dkr.ecr.us-east-1.amazonaws.com/charts
