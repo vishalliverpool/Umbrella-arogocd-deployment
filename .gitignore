@@ -7,6 +7,5 @@ values-local.yaml
 *.local.yaml
 .env
 
-# Helm: pulled OCI subcharts — resolved at deploy time, never committed
-sinec-app/charts/
-sinec-app/*.tgz
+# Helm: local packaging artifacts — never committed
+*.tgz
