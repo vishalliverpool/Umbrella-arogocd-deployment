@@ -23,12 +23,17 @@ on:
     tags:
       - "release-*"
   workflow_dispatch:
+    inputs:
+      services:
+        description: "Space-separated list of services to release"
+        required: false
+        default: "orders users payments"
 
 env:
   AWS_REGION: us-east-1
   REGISTRY: 218804696766.dkr.ecr.us-east-1.amazonaws.com
   ROLE_ARN: arn:aws:iam::218804696766:role/github-actions-deploy
-  SERVICES: "orders users payments"
+  SERVICES: ${{ github.event.inputs.services || 'orders users payments' }}
 
 permissions:
   contents: write   # push config updates to main
