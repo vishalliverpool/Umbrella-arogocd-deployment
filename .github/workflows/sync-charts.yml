@@ -1,81 +1,72 @@
 name: sync-charts
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Deployment pipeline — triggered by service pipelines after pushing to ECR.
+# Triggered by a git tag (e.g. v1.0.5) created via GitHub Releases.
 #
-# Trigger:  repository_dispatch (event: chart-pushed) from a service pipeline
-#           Payload: { "service": "payments", "version": "1.0.5" }
-#           Also triggerable manually via workflow_dispatch.
+# Before tagging:
+#   - Edit umbrella/Chart.yaml  → bump dependency versions
+#   - Edit umbrella/values.yaml → update image tags
+#   - Push to main
+#   - Create release tag  v<version>  → this pipeline runs
 #
 # Steps:
-#   1. resolve  → read service + version from dispatch payload or manual input
-#   2. update   → write version into services/<svc>/config.yaml
-#   3. commit   → commit the config change to main
-#   4. verify   → print deploy summary
-#
-# ArgoCD ApplicationSet watches services/*/config.yaml (git-files generator).
-# It pulls Helm charts directly from ECR OCI using the version in config.yaml.
+#   1. auth-aws          → OIDC to AWS
+#   2. ecr-login         → Helm login to ECR (needed for OCI sub-chart deps)
+#   3. helm-dep-update   → resolve sub-chart dependencies from ECR OCI
+#   4. argocd-sync       → trigger ArgoCD to deploy the updated umbrella chart
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
-  repository_dispatch:
-    types: [chart-pushed]
-  workflow_dispatch:
-    inputs:
-      service:
-        description: "Service to deploy (orders, users, payments)"
-        required: true
-      version:
-        description: "Chart version to deploy"
-        required: true
+  push:
+    tags:
+      - "v*"
 
 env:
+  AWS_REGION: us-east-1
   REGISTRY: 218804696766.dkr.ecr.us-east-1.amazonaws.com
+  ROLE_ARN: arn:aws:iam::218804696766:role/github-actions-deploy
 
 permissions:
-  contents: write
+  id-token: write
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
         with:
-          ref: main
+          version: v3.14.4
 
-      # ── 1. Resolve service + version from payload or manual input ────────────
-      - name: Resolve service and version
-        run: |
-          SERVICE="${{ github.event.client_payload.service || github.event.inputs.service }}"
-          VERSION="${{ github.event.client_payload.version || github.event.inputs.version }}"
-          if [ -z "$SERVICE" ] || [ -z "$VERSION" ]; then
-            echo "::error::service and version are required"
-            exit 1
-          fi
-          echo "SERVICE=$SERVICE" >> "$GITHUB_ENV"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Deploying $SERVICE @ $VERSION"
+      # ── 1. Auth to AWS ─────────────────────────────────────────────────────
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      # ── 2. Update services/<svc>/config.yaml ────────────────────────────────
-      - name: Update version config
+      # ── 2. Helm login to ECR (for OCI sub-chart dependency resolution) ─────
+      - name: Helm login to ECR
         run: |
-          sed -i "s/version: .*/version: \"$VERSION\"/" "services/$SERVICE/config.yaml"
-          echo "Updated services/$SERVICE/config.yaml → version: $VERSION"
+          aws ecr get-login-password --region "$AWS_REGION" | \
+            helm registry login --username AWS --password-stdin "$REGISTRY"
 
-      # ── 3. Commit to main ───────────────────────────────────────────────────
-      - name: Commit version config to main
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "services/$SERVICE/config.yaml"
-          git diff --cached --quiet || git commit -m "release: $SERVICE=$VERSION"
-          git push origin main
+      # ── 3. Resolve sub-chart dependencies from ECR OCI ─────────────────────
+      - name: Helm dependency update
+        run: helm dependency update umbrella/
 
-      # ── 4. Verify ───────────────────────────────────────────────────────────
-      - name: Verify
+      # ── 4. Trigger ArgoCD sync ─────────────────────────────────────────────
+      - name: ArgoCD sync
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_TOKEN: ${{ secrets.ARGOCD_TOKEN }}
         run: |
-          echo "════════════════════════════════════════"
-          echo "  Release complete"
-          echo "  $SERVICE → $VERSION"
-          echo "  ArgoCD will sync: oci://$REGISTRY/charts/$SERVICE:$VERSION"
-          echo "════════════════════════════════════════"
+          curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $ARGOCD_TOKEN" \
+            -H "Content-Type: application/json" \
+            https://$ARGOCD_SERVER/api/v1/applications/sinec-platform/sync \
+            -d '{"prune":true}' | grep -q "^2" || { echo "ArgoCD sync failed"; exit 1; }
+          echo "ArgoCD sync triggered for sinec-platform"
