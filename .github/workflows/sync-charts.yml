@@ -108,13 +108,12 @@ jobs:
 
       # ── 5. Commit updated config to main ────────────────────────────────────
       - name: Commit version config to main
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "release:${{ env.VERSIONS_SUMMARY }}"
-          file_pattern: services/*/config.yaml
-          commit_user_name: github-actions[bot]
-          commit_user_email: 41898282+github-actions[bot]@users.noreply.github.com
-          branch: main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/*/config.yaml
+          git diff --cached --quiet || git commit -m "release:$VERSIONS_SUMMARY"
+          git push origin main
 
       # ── 6. Verify — summarise what was released (no git, no AWS calls) ──────
       - name: Verify release
