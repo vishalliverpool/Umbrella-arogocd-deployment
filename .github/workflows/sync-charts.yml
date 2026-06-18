@@ -36,6 +36,10 @@ jobs:
         run: |
           set -e
 
+          # Derive umbrella chart version from the release tag (release-1.0.4 → 1.0.4)
+          UMBRELLA_VERSION="${GITHUB_REF_NAME#release-}"
+          echo "Umbrella chart version: $UMBRELLA_VERSION"
+
           echo "=========================================="
           echo "Finding latest charts in ECR for:"
           echo "  orders, users, payments"
@@ -45,7 +49,6 @@ jobs:
           for svc in orders users payments; do
             echo "── $svc ──"
 
-            # Get all image tags (chart versions) from ECR charts/ repo, sorted by push time
             LATEST=$(aws ecr describe-images \
               --repository-name "charts/$svc" \
               --region "$AWS_REGION" \
@@ -54,21 +57,25 @@ jobs:
 
             if [ -z "$LATEST" ] || [ "$LATEST" = "None" ]; then
               echo "  ⚠️  No charts found in ECR yet"
-              LATEST="1.0.0"  # fallback to initial version
+              LATEST="1.0.0"
             else
               echo "  ✅ Found: $LATEST"
             fi
 
-            # Bump the dependency version in the single bundled chart (sinec-app)
-            echo "  Updating sinec-app/Chart.yaml dependency '$svc'..."
+            echo "  Updating sinec-app/Chart.yaml dependency '$svc' → $LATEST"
             yq eval -i "(.dependencies[] | select(.name == \"$svc\") | .version) = \"$LATEST\"" sinec-app/Chart.yaml
           done
 
+          # Bump the umbrella chart version itself
+          echo ""
+          echo "Bumping umbrella chart version → $UMBRELLA_VERSION"
+          yq eval -i ".version = \"$UMBRELLA_VERSION\"" sinec-app/Chart.yaml
+
           echo ""
           echo "=========================================="
-          echo "Updated sinec-app/Chart.yaml dependencies:"
+          echo "Final sinec-app/Chart.yaml:"
           echo "=========================================="
-          yq eval '.dependencies' sinec-app/Chart.yaml
+          cat sinec-app/Chart.yaml
 
       - name: Commit and push to main (triggers ArgoCD sync)
         run: |
