@@ -1,0 +1,68 @@
+name: sync-charts
+
+# Trigger on schedule (hourly) or manual dispatch
+on:
+  schedule:
+    - cron: "0 * * * *"  # every hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  REGISTRY: 218804696766.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::218804696766:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | helm registry login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Get latest chart versions from ECR
+        run: |
+          set -e
+
+          # Install yq for YAML manipulation
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+          for svc in orders users payments; do
+            echo "Checking $svc chart versions..."
+
+            # Query ECR for image tags (chart versions are stored as image tags in charts/ repo)
+            LATEST=$(aws ecr describe-images \
+              --repository-name "charts/$svc" \
+              --region "$AWS_REGION" \
+              --query 'sort_by(imageDetails, &imagePushedAt)[-1].imageTags[0]' \
+              --output text 2>/dev/null || echo "1.0.0")
+
+            echo "  Found version: $LATEST"
+
+            # Update app-of-apps/values.yaml
+            yq eval -i "(.apps[] | select(.name == \"$svc\") | .version) = \"$LATEST\"" app-of-apps/values.yaml
+          done
+
+          echo ""
+          echo "=== Updated values.yaml ==="
+          grep -A 3 "name: orders" app-of-apps/values.yaml | head -20
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "chart-sync-bot"
+          git config user.email "chart-sync-bot@users.noreply.github.com"
+          git add app-of-apps/values.yaml
+          git commit -m "chore: sync latest chart versions from ECR" || { echo "no changes"; exit 0; }
+          git push origin main
