@@ -5,7 +5,7 @@ orders:
   replicaCount: 2
   image:
     repository: 218804696766.dkr.ecr.us-east-1.amazonaws.com/orders
-    tag: "1.0.8"
+    tag: "1.0.9"
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP
@@ -20,7 +20,6 @@ orders:
       memory: 128Mi
   ingress:
     enabled: false
-
 users:
   replicaCount: 2
   image:
@@ -40,7 +39,6 @@ users:
       memory: 128Mi
   ingress:
     enabled: false
-
 payments:
   replicaCount: 2
   image:
