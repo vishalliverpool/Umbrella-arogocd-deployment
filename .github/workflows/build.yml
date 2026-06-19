@@ -283,7 +283,6 @@ jobs:
               --values umbrella/environments/dev.yaml \
               --set global.release="${RELEASE_TAG}" \
               --set global.environment="dev" \
-              --atomic \
               --timeout 10m \
               --history-max 10 \
               --cleanup-on-fail \
@@ -295,7 +294,6 @@ jobs:
               --values umbrella/environments/dev.yaml \
               --set global.release="${RELEASE_TAG}" \
               --set global.environment="dev" \
-              --atomic \
               --timeout 10m \
               --description "Install ${RELEASE_TAG}"
           fi
