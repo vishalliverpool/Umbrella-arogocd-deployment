@@ -1,0 +1,42 @@
+name: build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  REGISTRY: 218804696766.dkr.ecr.us-east-1.amazonaws.com
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::218804696766:role/github-actions-deploy
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Helm login to ECR (for OCI sub-chart deps)
+        run: |
+          aws ecr get-login-password --region "$AWS_REGION" | \
+            helm registry login --username AWS --password-stdin "$REGISTRY"
+
+      - name: Resolve sub-chart dependencies
+        run: helm dependency update umbrella/
+
+      - name: Lint umbrella chart
+        run: helm lint umbrella/
