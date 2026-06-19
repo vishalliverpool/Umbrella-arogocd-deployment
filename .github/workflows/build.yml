@@ -1,42 +1,472 @@
-name: build
+name: Release Pipeline
 
+# ── Trigger model ─────────────────────────────────────────────────────────────
+#   branch push (main)  → build → deploy DEV  (namespace: dev,  no tag, no gate)
+#   release tag (v*)     → build → approve QA → deploy QA (namespace: qa)
+#   Both namespaces live in the SAME cluster (platform-cluster).
+# ──────────────────────────────────────────────────────────────────────────────
 on:
-  pull_request:
-    branches: [main]
   push:
     branches: [main]
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - dev
+          - qa
+      release_tag:
+        description: "Release tag to promote (qa only, e.g. v1.2.3)"
+        required: false
+        type: string
 
 permissions:
-  id-token: write
+  id-token: write      # OIDC → assume AWS role (ECR login, EKS access)
   contents: read
 
 env:
+  RELEASE_NAME: platform-release
+  CLUSTER_NAME: platform-cluster
   AWS_REGION: us-east-1
   REGISTRY: 218804696766.dkr.ecr.us-east-1.amazonaws.com
+  DEPLOY_ROLE: arn:aws:iam::218804696766:role/github-actions-deploy
 
 jobs:
-  build:
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 1 — VALIDATE
+  # Resolves whether this run targets dev (branch) or qa (tag), and the version.
+  # ────────────────────────────────────────────────────────────────────────────
+  validate:
     runs-on: ubuntu-latest
+    outputs:
+      deploy_env:    ${{ steps.meta.outputs.deploy_env }}
+      release_tag:   ${{ steps.meta.outputs.release_tag }}
+      chart_version: ${{ steps.meta.outputs.chart_version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: azure/setup-helm@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          version: v3.14.4
+          ref: ${{ inputs.release_tag || github.ref }}
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Install yq
+        run: |
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+
+      - name: Extract metadata
+        id: meta
+        run: |
+          # Decide target env + version from the trigger.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            DEPLOY_ENV="${{ inputs.target_env }}"
+            if [ "$DEPLOY_ENV" = "qa" ]; then
+              TAG="${{ inputs.release_tag }}"
+            else
+              TAG="dev-$(git rev-parse --short HEAD)"
+            fi
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            DEPLOY_ENV="qa"
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            DEPLOY_ENV="dev"
+            TAG="dev-$(git rev-parse --short HEAD)"
+          fi
+
+          # Chart version: tags strip the leading v; dev uses a semver prerelease.
+          if [ "$DEPLOY_ENV" = "qa" ]; then
+            CHART_VERSION="${TAG#v}"
+          else
+            CHART_VERSION="0.0.0-dev.$(git rev-parse --short HEAD)"
+          fi
+
+          if [[ "$TAG" =~ -(rc|alpha|beta)\. ]]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+
+          echo "deploy_env=${DEPLOY_ENV}"       >> $GITHUB_OUTPUT
+          echo "release_tag=${TAG}"             >> $GITHUB_OUTPUT
+          echo "chart_version=${CHART_VERSION}" >> $GITHUB_OUTPUT
+          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Trigger    : ${{ github.event_name }}"
+          echo "Target env : ${DEPLOY_ENV}"
+          echo "Release tag: ${TAG}"
+          echo "Chart ver  : ${CHART_VERSION}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+      # appVersion must match the tag — QA releases only (dev has no tag).
+      - name: Validate tag matches umbrella Chart.yaml appVersion
+        if: steps.meta.outputs.deploy_env == 'qa'
+        run: |
+          TAG="${{ steps.meta.outputs.release_tag }}"
+          APP_VERSION=$(yq -r '.appVersion' umbrella/Chart.yaml)
+
+          if [ "$APP_VERSION" != "$TAG" ]; then
+            echo "Version mismatch!"
+            echo "  Git tag              : ${TAG}"
+            echo "  Chart.yaml appVersion: ${APP_VERSION}"
+            echo ""
+            echo "Fix: set appVersion: \"${TAG}\" in umbrella/Chart.yaml, raise PR → merge → push tag"
+            exit 1
+          fi
+          echo "Tag matches appVersion: ${TAG}"
+
+      - name: Print release summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Target env : ${{ steps.meta.outputs.deploy_env }}"
+          echo "Release    : ${{ steps.meta.outputs.release_tag }}"
+          echo "Pre-release: ${{ steps.meta.outputs.is_prerelease }}"
+          echo ""
+          echo "Services in this release:"
+          yq -r '.dependencies[] | "  \(.name): \(.version)"' umbrella/Chart.yaml
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 2 — BUILD
+  # Packages a single umbrella .tgz reused across dev / qa.
+  # Values are NOT baked in — applied at deploy time from the repo.
+  # ────────────────────────────────────────────────────────────────────────────
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      artifact_name: ${{ steps.artifact.outputs.artifact_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - name: Install tools
+        run: |
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Set artifact name
+        id: artifact
+        run: |
+          ARTIFACT_NAME="umbrella-charts-${{ needs.validate.outputs.chart_version }}"
+          echo "artifact_name=${ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "Artifact: ${ARTIFACT_NAME}"
+
+      - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: arn:aws:iam::218804696766:role/github-actions-deploy
+          role-to-assume: ${{ env.DEPLOY_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Helm login to ECR (for OCI sub-chart deps)
         run: |
-          aws ecr get-login-password --region "$AWS_REGION" | \
-            helm registry login --username AWS --password-stdin "$REGISTRY"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | helm registry login --username AWS --password-stdin "$REGISTRY"
 
-      - name: Resolve sub-chart dependencies
-        run: helm dependency update umbrella/
+      - name: Helm dependency update
+        run: |
+          # Pulls each sub-chart .tgz from ECR (OCI) into umbrella/charts/.
+          # 'update' (not 'build') regenerates Chart.lock, so it stays robust
+          # when service pipelines bump dependency versions in Chart.yaml.
+          helm dependency update umbrella/
+          echo "--- Dependency charts ---"
+          ls -lh umbrella/charts/
 
-      - name: Lint umbrella chart
-        run: helm lint umbrella/
+      - name: Package umbrella into single .tgz
+        run: |
+          mkdir -p dist
+          helm package umbrella/ \
+            --destination dist/ \
+            --version "${{ needs.validate.outputs.chart_version }}"
+          echo "Packaged:"
+          ls -lh dist/
+
+      - name: Verify package
+        run: |
+          helm show chart dist/platform-release-${{ needs.validate.outputs.chart_version }}.tgz
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.artifact.outputs.artifact_name }}
+          path: dist/
+          retention-days: 30
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 3 — DEPLOY DEV
+  # Runs on branch push (or manual dispatch → dev). No tag, no approval.
+  # Namespace: dev
+  # ────────────────────────────────────────────────────────────────────────────
+  deploy-dev:
+    needs: [validate, build]
+    if: needs.validate.outputs.deploy_env == 'dev'
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      RELEASE_TAG:   ${{ needs.validate.outputs.release_tag }}
+      CHART_VERSION: ${{ needs.validate.outputs.chart_version }}
+      NAMESPACE: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: dist/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+          echo "--- Cluster nodes ---"
+          kubectl get nodes
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl get namespace ${NAMESPACE} > /dev/null 2>&1 \
+            || kubectl create namespace ${NAMESPACE}
+          echo "Namespace: ${NAMESPACE}"
+
+      - name: Helm install or upgrade (DEV)
+        run: |
+          TGZ=$(ls dist/platform-release-*.tgz)
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Chart    : ${TGZ}"
+          echo "Namespace: ${NAMESPACE}"
+          echo "Release  : ${RELEASE_TAG}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if helm status ${{ env.RELEASE_NAME }} --namespace ${NAMESPACE} > /dev/null 2>&1; then
+            STATUS=$(helm status ${{ env.RELEASE_NAME }} \
+              --namespace ${NAMESPACE} --output json | jq -r '.info.status')
+            echo "Existing release — status: ${STATUS}"
+
+            if [[ "$STATUS" =~ ^(failed|pending-install|pending-upgrade|pending-rollback)$ ]]; then
+              echo "Bad state — rolling back to last good revision"
+              helm rollback ${{ env.RELEASE_NAME }} 0 \
+                --namespace ${NAMESPACE} --wait --timeout 5m
+            fi
+
+            helm upgrade ${{ env.RELEASE_NAME }} "${TGZ}" \
+              --namespace ${NAMESPACE} \
+              --values umbrella/environments/dev.yaml \
+              --set global.release="${RELEASE_TAG}" \
+              --set global.environment="dev" \
+              --atomic \
+              --timeout 10m \
+              --history-max 10 \
+              --cleanup-on-fail \
+              --description "Upgrade to ${RELEASE_TAG}"
+          else
+            echo "First deploy — helm install"
+            helm install ${{ env.RELEASE_NAME }} "${TGZ}" \
+              --namespace ${NAMESPACE} \
+              --values umbrella/environments/dev.yaml \
+              --set global.release="${RELEASE_TAG}" \
+              --set global.environment="dev" \
+              --atomic \
+              --timeout 10m \
+              --description "Install ${RELEASE_TAG}"
+          fi
+
+      - name: Verify rollouts (DEV)
+        run: |
+          echo "--- Verifying rollouts in namespace: ${NAMESPACE} ---"
+          FAILED=0
+
+          while IFS= read -r SERVICE; do
+            echo -n "  ${SERVICE}... "
+            kubectl rollout status deployment/${SERVICE} \
+              --namespace ${NAMESPACE} --timeout 300s \
+              && echo "OK" \
+              || { echo "FAILED"; FAILED=$((FAILED+1)); }
+          done < <(yq -r '.dependencies[].name' umbrella/Chart.yaml)
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo ""
+            echo "${FAILED} deployment(s) failed — debug info:"
+            kubectl get pods -n ${NAMESPACE}
+            kubectl get events -n ${NAMESPACE} --sort-by='.lastTimestamp' | tail -20
+            exit 1
+          fi
+
+          echo "All services healthy in DEV"
+
+      - name: Helm release status (DEV)
+        run: |
+          helm status ${{ env.RELEASE_NAME }} --namespace ${NAMESPACE}
+          helm history ${{ env.RELEASE_NAME }} --namespace ${NAMESPACE} --max 5 --output table
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 4 — QA APPROVAL GATE
+  # Tag-triggered only. Pauses until a reviewer approves the qa-approval env.
+  # ────────────────────────────────────────────────────────────────────────────
+  approve-qa:
+    needs: [validate, build]
+    if: needs.validate.outputs.deploy_env == 'qa'
+    runs-on: ubuntu-latest
+    environment: qa-approval
+
+    steps:
+      - name: QA promotion gate
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Awaiting QA promotion approval"
+          echo "Release: ${{ needs.validate.outputs.release_tag }}"
+          echo "Actor  : ${{ github.actor }}"
+          echo "Time   : $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # JOB 5 — DEPLOY QA
+  # Runs after approval. Same artifact as a dev build — only the values differ.
+  # Namespace: qa
+  # ────────────────────────────────────────────────────────────────────────────
+  deploy-qa:
+    needs: [validate, build, approve-qa]
+    if: needs.validate.outputs.deploy_env == 'qa'
+    runs-on: ubuntu-latest
+    environment: qa
+    env:
+      RELEASE_TAG:   ${{ needs.validate.outputs.release_tag }}
+      CHART_VERSION: ${{ needs.validate.outputs.chart_version }}
+      NAMESPACE: qa
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_tag || github.ref }}
+
+      - name: Install tools
+        run: |
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+          curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact_name }}
+          path: dist/
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ env.CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl get namespace ${NAMESPACE} > /dev/null 2>&1 \
+            || kubectl create namespace ${NAMESPACE}
+          echo "Namespace: ${NAMESPACE}"
+
+      - name: Helm install or upgrade (QA)
+        run: |
+          TGZ=$(ls dist/platform-release-*.tgz)
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Chart    : ${TGZ}"
+          echo "Namespace: ${NAMESPACE}"
+          echo "Release  : ${RELEASE_TAG}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          if helm status ${{ env.RELEASE_NAME }} --namespace ${NAMESPACE} > /dev/null 2>&1; then
+            STATUS=$(helm status ${{ env.RELEASE_NAME }} \
+              --namespace ${NAMESPACE} --output json | jq -r '.info.status')
+            echo "Existing release — status: ${STATUS}"
+
+            if [[ "$STATUS" =~ ^(failed|pending-install|pending-upgrade|pending-rollback)$ ]]; then
+              echo "Bad state — rolling back"
+              helm rollback ${{ env.RELEASE_NAME }} 0 \
+                --namespace ${NAMESPACE} --wait --timeout 5m
+            fi
+
+            helm upgrade ${{ env.RELEASE_NAME }} "${TGZ}" \
+              --namespace ${NAMESPACE} \
+              --values umbrella/environments/qa.yaml \
+              --set global.release="${RELEASE_TAG}" \
+              --set global.environment="qa" \
+              --atomic \
+              --timeout 10m \
+              --history-max 10 \
+              --cleanup-on-fail \
+              --description "Upgrade to ${RELEASE_TAG}"
+          else
+            echo "First deploy — helm install"
+            helm install ${{ env.RELEASE_NAME }} "${TGZ}" \
+              --namespace ${NAMESPACE} \
+              --values umbrella/environments/qa.yaml \
+              --set global.release="${RELEASE_TAG}" \
+              --set global.environment="qa" \
+              --atomic \
+              --timeout 10m \
+              --description "Install ${RELEASE_TAG}"
+          fi
+
+      - name: Verify rollouts (QA)
+        run: |
+          echo "--- Verifying rollouts in namespace: ${NAMESPACE} ---"
+          FAILED=0
+
+          while IFS= read -r SERVICE; do
+            echo -n "  ${SERVICE}... "
+            kubectl rollout status deployment/${SERVICE} \
+              --namespace ${NAMESPACE} --timeout 300s \
+              && echo "OK" \
+              || { echo "FAILED"; FAILED=$((FAILED+1)); }
+          done < <(yq -r '.dependencies[].name' umbrella/Chart.yaml)
+
+          if [ "$FAILED" -gt 0 ]; then
+            echo ""
+            echo "${FAILED} deployment(s) failed — debug info:"
+            kubectl get pods -n ${NAMESPACE}
+            kubectl get events -n ${NAMESPACE} --sort-by='.lastTimestamp' | tail -20
+            exit 1
+          fi
+
+          echo "All services healthy in QA"
+
+      - name: Helm release status (QA)
+        run: |
+          helm status ${{ env.RELEASE_NAME }} --namespace ${NAMESPACE}
+          helm history ${{ env.RELEASE_NAME }} --namespace ${NAMESPACE} --max 5 --output table

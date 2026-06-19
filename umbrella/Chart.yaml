@@ -1,21 +1,19 @@
 apiVersion: v2
-name: sinec-platform
+name: platform-release
 description: Umbrella chart for sinec-app services
+type: application
+# version (chart) + appVersion (release tag) — appVersion must match the pushed
+# tag (validate job). Sub-charts are pulled from ECR (OCI), pushed there by each
+# service's own release pipeline.
 version: 1.0.0
-# ── To release a service update ──────────────────────────────────────────────
-# 1. Bump the dependency version below to the new chart version in ECR.
-# 2. Update values.yaml with the new image tag.
-# 3. git commit && git push
-# 4. git tag v<version> && git push origin v<version>
-# ArgoCD detects the git change on main and deploys automatically.
-# ─────────────────────────────────────────────────────────────────────────────
+appVersion: "v1.0.0"
 dependencies:
   - name: orders
     version: "0.1.0"
     repository: "oci://218804696766.dkr.ecr.us-east-1.amazonaws.com/charts"
   - name: users
-    version: "1.0.4"
+    version: "0.1.0"
     repository: "oci://218804696766.dkr.ecr.us-east-1.amazonaws.com/charts"
   - name: payments
-    version: "1.0.4"
+    version: "0.1.0"
     repository: "oci://218804696766.dkr.ecr.us-east-1.amazonaws.com/charts"
