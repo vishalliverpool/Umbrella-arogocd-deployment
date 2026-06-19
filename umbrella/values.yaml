@@ -2,12 +2,10 @@
 
 orders:
   image:
-    tag: "1.0.4"
-
+    tag: "1.0.8"
 users:
   image:
     tag: "1.0.4"
-
 payments:
   image:
     tag: "1.0.4"

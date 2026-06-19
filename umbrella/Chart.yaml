@@ -2,7 +2,6 @@ apiVersion: v2
 name: sinec-platform
 description: Umbrella chart for sinec-app services
 version: 1.0.0
-
 # ── To release a service update ──────────────────────────────────────────────
 # 1. Bump the dependency version below to the new chart version in ECR.
 # 2. Update values.yaml with the new image tag.
@@ -10,10 +9,9 @@ version: 1.0.0
 # 4. git tag v<version> && git push origin v<version>
 # ArgoCD detects the git change on main and deploys automatically.
 # ─────────────────────────────────────────────────────────────────────────────
-
 dependencies:
   - name: orders
-    version: "1.0.4"
+    version: "0.1.0"
     repository: "oci://218804696766.dkr.ecr.us-east-1.amazonaws.com/charts"
   - name: users
     version: "1.0.4"
