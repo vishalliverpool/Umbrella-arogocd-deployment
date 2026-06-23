@@ -1,32 +1,33 @@
 name: deploy
 
-# GitOps deploy pipeline.
+# DEV  : workflow_dispatch (environment=dev) triggered by build.yml via API dispatch.
+#        SHA passed as image_tag input — no gitops commits for dev.
+# QA   : push tag  qa-v*   to this repo  (e.g. qa-v1.0.0-rc.1)
+#        qa.yaml already bumped by release.yml in the service repo.
+# PROD : push tag  prod-v* to this repo  (e.g. prod-v1.0.0)
+#        prod.yaml already bumped by release.yml in the service repo.
 #
-# DEV  : triggered by service build.yml via API dispatch, SHA passed as image_tag input.
-#        No gitops commits for dev — image tag resolved at deploy time.
-# QA   : manual workflow_dispatch only. image.tag in services/<svc>/qa.yaml (bumped by release.yml).
-# PROD : manual workflow_dispatch only. image.tag in services/<svc>/prod.yaml (bumped by release.yml).
+# Commits to main (qa.yaml / prod.yaml bumps from release.yml) never trigger a deploy.
+
 on:
   push:
-    branches: [main]
-    paths:
-      - "services/*/qa.yaml"
-      - "services/*/prod.yaml"
-      - "services/*/chart/**"
+    tags:
+      - "qa-v*"
+      - "prod-v*"
   workflow_dispatch:
     inputs:
       environment:
-        description: "Environment to (re)deploy"
+        description: "Environment to deploy"
         required: true
         type: choice
         options: [dev, qa, prod]
       service:
-        description: "Service to (re)deploy (or 'all')"
+        description: "Service to deploy (all = every service)"
         required: true
         type: choice
         options: [all, orders, users, payments]
       image_tag:
-        description: "Image tag to deploy (dev only — SHA from build.yml)"
+        description: "Image tag — dev only (SHA from build.yml)"
         required: false
         type: string
 
@@ -40,105 +41,70 @@ env:
   DEPLOY_ROLE: arn:aws:iam::218804696766:role/github-actions-deploy
 
 jobs:
-  # ── Resolve which services changed, per environment ──────────────────────────
-  detect:
+  # ── Resolve environment + services list ──────────────────────────────────────
+  setup:
     runs-on: ubuntu-latest
     outputs:
-      dev_services:  ${{ steps.changes.outputs.dev_services }}
-      qa_services:   ${{ steps.changes.outputs.qa_services }}
-      prod_services: ${{ steps.changes.outputs.prod_services }}
-      has_dev:  ${{ steps.changes.outputs.has_dev }}
-      has_qa:   ${{ steps.changes.outputs.has_qa }}
-      has_prod: ${{ steps.changes.outputs.has_prod }}
+      environment: ${{ steps.resolve.outputs.environment }}
+      services:    ${{ steps.resolve.outputs.services }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - id: changes
+      - id: resolve
         run: |
           set -euo pipefail
-          ENVS="dev qa prod"
-          for e in $ENVS; do : > "/tmp/$e.list"; done
+          ALL='["orders","users","payments"]'
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            if [[ "$TAG" == qa-v* ]]; then
+              ENV="qa"
+            elif [[ "$TAG" == prod-v* ]]; then
+              ENV="prod"
+            else
+              echo "::error::Unrecognised tag prefix: ${TAG}"
+              exit 1
+            fi
+            SERVICES="$ALL"
+          else
             ENV="${{ inputs.environment }}"
             if [ "${{ inputs.service }}" = "all" ]; then
-              for d in services/*/; do
-                svc="$(basename "$d")"
-                [ -f "services/$svc/$ENV.yaml" ] && echo "$svc" >> "/tmp/$ENV.list"
-              done
+              SERVICES="$ALL"
             else
-              echo "${{ inputs.service }}" >> "/tmp/$ENV.list"
+              SERVICES='["${{ inputs.service }}"]'
             fi
-          else
-            BEFORE="${{ github.event.before }}"
-            if [ -z "$BEFORE" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-              BEFORE="$(git rev-parse HEAD^ 2>/dev/null || echo '')"
-            fi
-            if [ -n "$BEFORE" ]; then
-              FILES="$(git diff --name-only "$BEFORE" HEAD -- services/)"
-            else
-              FILES="$(git ls-files services/)"
-            fi
-
-            while IFS= read -r f; do
-              [ -z "$f" ] && continue
-              # services/<svc>/dev.yaml  → dev, <svc>
-              # services/<svc>/qa.yaml   → qa,  <svc>
-              # services/<svc>/prod.yaml → prod, <svc>
-              # services/<svc>/chart/**  → all envs, <svc>
-              case "$f" in
-                services/*/dev.yaml|services/*/qa.yaml|services/*/prod.yaml)
-                  S="$(echo "$f" | cut -d/ -f2)"
-                  E="$(basename "$f" .yaml)"
-                  echo "$S" >> "/tmp/$E.list"
-                  ;;
-                services/*/chart/*)
-                  S="$(echo "$f" | cut -d/ -f2)"
-                  for E in $ENVS; do echo "$S" >> "/tmp/$E.list"; done
-                  ;;
-              esac
-            done <<< "$FILES"
           fi
 
-          for e in $ENVS; do
-            ARR="$(sort -u "/tmp/$e.list" | sed '/^$/d' | jq -R . | jq -s -c .)"
-            echo "${e}_services=${ARR}" >> "$GITHUB_OUTPUT"
-            if [ "$ARR" = "[]" ]; then
-              echo "has_${e}=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "has_${e}=true" >> "$GITHUB_OUTPUT"
-            fi
-            echo "${e}: ${ARR}"
-          done
+          echo "environment=${ENV}" >> "$GITHUB_OUTPUT"
+          echo "services=${SERVICES}"  >> "$GITHUB_OUTPUT"
+          echo "Resolved: env=${ENV}, services=${SERVICES}"
 
-  # ── DEV (triggered by build.yml via API dispatch) ────────────────────────────
+  # ── DEV ──────────────────────────────────────────────────────────────────────
   deploy-dev:
-    needs: detect
-    if: needs.detect.outputs.has_dev == 'true'
+    needs: setup
+    if: needs.setup.outputs.environment == 'dev'
     runs-on: ubuntu-latest
     environment: dev
     strategy:
       fail-fast: false
       matrix:
-        service: ${{ fromJson(needs.detect.outputs.dev_services) }}
+        service: ${{ fromJson(needs.setup.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+
       - name: Resolve image tag
         id: tag
         run: |
           IMAGE_TAG="${{ inputs.image_tag }}"
           if [ -z "$IMAGE_TAG" ]; then
-            # Manual dispatch without explicit tag — pick most recently pushed image from ECR
             IMAGE_TAG=$(aws ecr describe-images \
               --repository-name "${{ matrix.service }}" \
               --region "$AWS_REGION" \
@@ -147,10 +113,13 @@ jobs:
             echo "No image_tag input — resolved from ECR: $IMAGE_TAG"
           fi
           echo "tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
       - name: Ensure namespace
         run: kubectl get ns dev >/dev/null 2>&1 || kubectl create ns dev
+
       - name: Deploy ${{ matrix.service }} → dev
         run: |
           helm upgrade --install "${{ matrix.service }}" \
@@ -159,35 +128,41 @@ jobs:
             --values "services/${{ matrix.service }}/dev.yaml" \
             --set image.tag="${{ steps.tag.outputs.tag }}" \
             --wait --timeout 5m
+
       - name: Verify rollout
         run: |
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace dev --timeout 300s
           kubectl get pods -n dev -l "app=${{ matrix.service }}"
 
-  # ── QA (manual trigger only) ─────────────────────────────────────────────────
+  # ── QA ───────────────────────────────────────────────────────────────────────
   deploy-qa:
-    needs: detect
-    if: github.event_name == 'workflow_dispatch' && needs.detect.outputs.has_qa == 'true'
+    needs: setup
+    if: needs.setup.outputs.environment == 'qa'
     runs-on: ubuntu-latest
     environment: qa
     strategy:
       fail-fast: false
       matrix:
-        service: ${{ fromJson(needs.detect.outputs.qa_services) }}
+        service: ${{ fromJson(needs.setup.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
       - name: Ensure namespace
         run: kubectl get ns qa >/dev/null 2>&1 || kubectl create ns qa
+
       - name: Deploy ${{ matrix.service }} → qa
         run: |
           helm upgrade --install "${{ matrix.service }}" \
@@ -195,35 +170,41 @@ jobs:
             --namespace qa \
             --values "services/${{ matrix.service }}/qa.yaml" \
             --wait --timeout 5m
+
       - name: Verify rollout
         run: |
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace qa --timeout 300s
           kubectl get pods -n qa -l "app=${{ matrix.service }}"
 
-  # ── PROD (manual trigger only) ───────────────────────────────────────────────
+  # ── PROD ─────────────────────────────────────────────────────────────────────
   deploy-prod:
-    needs: detect
-    if: github.event_name == 'workflow_dispatch' && needs.detect.outputs.has_prod == 'true'
+    needs: setup
+    if: needs.setup.outputs.environment == 'prod'
     runs-on: ubuntu-latest
     environment: prod
     strategy:
       fail-fast: false
       matrix:
-        service: ${{ fromJson(needs.detect.outputs.prod_services) }}
+        service: ${{ fromJson(needs.setup.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
+
       - uses: azure/setup-helm@v4
         with:
           version: v3.14.4
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
       - name: Ensure namespace
         run: kubectl get ns prod >/dev/null 2>&1 || kubectl create ns prod
+
       - name: Deploy ${{ matrix.service }} → prod
         run: |
           helm upgrade --install "${{ matrix.service }}" \
@@ -231,6 +212,7 @@ jobs:
             --namespace prod \
             --values "services/${{ matrix.service }}/prod.yaml" \
             --wait --timeout 5m
+
       - name: Verify rollout
         run: |
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace prod --timeout 300s
