@@ -148,10 +148,10 @@ jobs:
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace dev --timeout 300s
           kubectl get pods -n dev -l "app=${{ matrix.service }}"
 
-  # ── QA (gated by 'qa' environment) ───────────────────────────────────────────
+  # ── QA (manual trigger only) ─────────────────────────────────────────────────
   deploy-qa:
     needs: detect
-    if: needs.detect.outputs.has_qa == 'true'
+    if: github.event_name == 'workflow_dispatch' && needs.detect.outputs.has_qa == 'true'
     runs-on: ubuntu-latest
     environment: qa
     strategy:
@@ -184,10 +184,10 @@ jobs:
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace qa --timeout 300s
           kubectl get pods -n qa -l "app=${{ matrix.service }}"
 
-  # ── PROD (gated by 'prod' environment) ───────────────────────────────────────
+  # ── PROD (manual trigger only) ───────────────────────────────────────────────
   deploy-prod:
     needs: detect
-    if: needs.detect.outputs.has_prod == 'true'
+    if: github.event_name == 'workflow_dispatch' && needs.detect.outputs.has_prod == 'true'
     runs-on: ubuntu-latest
     environment: prod
     strategy:
