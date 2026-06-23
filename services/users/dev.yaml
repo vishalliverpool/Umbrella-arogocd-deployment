@@ -1,4 +1,1 @@
-# dev overrides for users — image.tag is bumped by users build.yml on main merge.
 replicaCount: 1
-image:
-  tag: "1.0.4"

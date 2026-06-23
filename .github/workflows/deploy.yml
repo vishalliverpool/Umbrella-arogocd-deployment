@@ -1,21 +1,18 @@
 name: deploy
 
-# GitOps deploy — the per-env values files are the source of truth.
+# GitOps deploy pipeline.
 #
-#   service build.yml   → bumps services/<svc>/dev.yaml   (image tag = <sha>)
-#   service release.yml → bumps services/<svc>/qa.yaml or prod.yaml (rc / release tag)
-#
-# On push, deploys ONLY the changed <service>→<env> pairs — one team's release
-# never touches another service or environment. Tag deployed = what's in the values
-# file (no --set overrides). Roll back by reverting the bump commit.
-#
-# Three separate jobs keep each environment tracked independently, gated by its
-# own GitHub Environment (set required reviewers on qa + prod; dev auto-deploys).
+# DEV  : triggered by service build.yml via API dispatch, SHA passed as image_tag input.
+#        No gitops commits for dev — image tag resolved at deploy time.
+# QA   : manual workflow_dispatch only. image.tag in services/<svc>/qa.yaml (bumped by release.yml).
+# PROD : manual workflow_dispatch only. image.tag in services/<svc>/prod.yaml (bumped by release.yml).
 on:
   push:
     branches: [main]
     paths:
-      - "services/**"
+      - "services/*/qa.yaml"
+      - "services/*/prod.yaml"
+      - "services/*/chart/**"
   workflow_dispatch:
     inputs:
       environment:
@@ -28,6 +25,10 @@ on:
         required: true
         type: choice
         options: [all, orders, users, payments]
+      image_tag:
+        description: "Image tag to deploy (dev only — SHA from build.yml)"
+        required: false
+        type: string
 
 permissions:
   id-token: write
@@ -112,7 +113,7 @@ jobs:
             echo "${e}: ${ARR}"
           done
 
-  # ── DEV (auto) ───────────────────────────────────────────────────────────────
+  # ── DEV (triggered by build.yml via API dispatch) ────────────────────────────
   deploy-dev:
     needs: detect
     if: needs.detect.outputs.has_dev == 'true'
@@ -132,6 +133,20 @@ jobs:
         with:
           role-to-assume: ${{ env.DEPLOY_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+      - name: Resolve image tag
+        id: tag
+        run: |
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          if [ -z "$IMAGE_TAG" ]; then
+            # Manual dispatch without explicit tag — pick most recently pushed image from ECR
+            IMAGE_TAG=$(aws ecr describe-images \
+              --repository-name "${{ matrix.service }}" \
+              --region "$AWS_REGION" \
+              --query 'sort_by(imageDetails,&imagePushedAt)[-1].imageTags[0]' \
+              --output text)
+            echo "No image_tag input — resolved from ECR: $IMAGE_TAG"
+          fi
+          echo "tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
       - name: Update kubeconfig
         run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
       - name: Ensure namespace
@@ -142,6 +157,7 @@ jobs:
             "services/${{ matrix.service }}/chart" \
             --namespace dev \
             --values "services/${{ matrix.service }}/dev.yaml" \
+            --set image.tag="${{ steps.tag.outputs.tag }}" \
             --wait --timeout 5m
       - name: Verify rollout
         run: |
