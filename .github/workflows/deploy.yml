@@ -1,10 +1,18 @@
 name: deploy
 
-# Per-service, per-environment GitOps deploy.
-# A service pipeline bumps environments/<env>/<service>.yaml and pushes here.
-# detect → resolves which services changed in each env; then THREE separate
-# jobs (deploy-dev / deploy-qa / deploy-prod) roll those services out, so each
-# environment is tracked independently and gated by its own GitHub Environment.
+# GitOps deploy — the per-env values files are the source of truth.
+#
+#   service build.yml   → bumps environments/dev/<svc>.yaml   (image tag = <sha>)
+#   service release.yml → bumps environments/qa|prod/<svc>.yaml (rc / release tag)
+#
+# On push, this workflow deploys ONLY the changed <service>→<env> pairs, so one
+# team's release never touches another service or another environment. The tag
+# deployed is exactly what's committed in the values file (no --set overrides),
+# so the repo always reflects what is running. Roll back by reverting the bump.
+#
+# Three separate jobs (deploy-dev / deploy-qa / deploy-prod) keep each
+# environment tracked independently and gated by its own GitHub Environment
+# (set required reviewers on qa + prod; leave dev open for auto-deploy).
 on:
   push:
     branches: [main]
@@ -19,10 +27,10 @@ on:
         type: choice
         options: [dev, qa, prod]
       service:
-        description: "Service to (re)deploy"
+        description: "Service to (re)deploy (or 'all')"
         required: true
         type: choice
-        options: [orders, users, payments]
+        options: [all, orders, users, payments]
 
 permissions:
   id-token: write
@@ -56,7 +64,15 @@ jobs:
           for e in $ENVS; do : > "/tmp/$e.list"; done
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "${{ inputs.service }}" >> "/tmp/${{ inputs.environment }}.list"
+            ENV="${{ inputs.environment }}"
+            if [ "${{ inputs.service }}" = "all" ]; then
+              # every service that has a values file in the chosen env
+              for f in environments/"$ENV"/*.yaml; do
+                [ -e "$f" ] && basename "$f" .yaml >> "/tmp/$ENV.list"
+              done
+            else
+              echo "${{ inputs.service }}" >> "/tmp/$ENV.list"
+            fi
           else
             BEFORE="${{ github.event.before }}"
             if [ -z "$BEFORE" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
@@ -96,7 +112,7 @@ jobs:
             echo "${e}: ${ARR}"
           done
 
-  # ── DEV ──────────────────────────────────────────────────────────────────────
+  # ── DEV (auto) ───────────────────────────────────────────────────────────────
   deploy-dev:
     needs: detect
     if: needs.detect.outputs.has_dev == 'true'
@@ -120,7 +136,7 @@ jobs:
         run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
       - name: Ensure namespace
         run: kubectl get ns dev >/dev/null 2>&1 || kubectl create ns dev
-      - name: Helm upgrade --install (${{ matrix.service }} → dev)
+      - name: Deploy ${{ matrix.service }} → dev
         run: |
           helm upgrade --install "${{ matrix.service }}" "charts/${{ matrix.service }}" \
             --namespace dev \
@@ -131,7 +147,7 @@ jobs:
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace dev --timeout 300s
           kubectl get pods -n dev -l app=${{ matrix.service }}
 
-  # ── QA ───────────────────────────────────────────────────────────────────────
+  # ── QA (gated by 'qa' environment) ───────────────────────────────────────────
   deploy-qa:
     needs: detect
     if: needs.detect.outputs.has_qa == 'true'
@@ -155,7 +171,7 @@ jobs:
         run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
       - name: Ensure namespace
         run: kubectl get ns qa >/dev/null 2>&1 || kubectl create ns qa
-      - name: Helm upgrade --install (${{ matrix.service }} → qa)
+      - name: Deploy ${{ matrix.service }} → qa
         run: |
           helm upgrade --install "${{ matrix.service }}" "charts/${{ matrix.service }}" \
             --namespace qa \
@@ -166,7 +182,7 @@ jobs:
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace qa --timeout 300s
           kubectl get pods -n qa -l app=${{ matrix.service }}
 
-  # ── PROD ─────────────────────────────────────────────────────────────────────
+  # ── PROD (gated by 'prod' environment) ───────────────────────────────────────
   deploy-prod:
     needs: detect
     if: needs.detect.outputs.has_prod == 'true'
@@ -190,7 +206,7 @@ jobs:
         run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
       - name: Ensure namespace
         run: kubectl get ns prod >/dev/null 2>&1 || kubectl create ns prod
-      - name: Helm upgrade --install (${{ matrix.service }} → prod)
+      - name: Deploy ${{ matrix.service }} → prod
         run: |
           helm upgrade --install "${{ matrix.service }}" "charts/${{ matrix.service }}" \
             --namespace prod \
