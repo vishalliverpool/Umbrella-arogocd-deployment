@@ -2,23 +2,20 @@ name: deploy
 
 # GitOps deploy — the per-env values files are the source of truth.
 #
-#   service build.yml   → bumps environments/dev/<svc>.yaml   (image tag = <sha>)
-#   service release.yml → bumps environments/qa|prod/<svc>.yaml (rc / release tag)
+#   service build.yml   → bumps services/<svc>/dev.yaml   (image tag = <sha>)
+#   service release.yml → bumps services/<svc>/qa.yaml or prod.yaml (rc / release tag)
 #
-# On push, this workflow deploys ONLY the changed <service>→<env> pairs, so one
-# team's release never touches another service or another environment. The tag
-# deployed is exactly what's committed in the values file (no --set overrides),
-# so the repo always reflects what is running. Roll back by reverting the bump.
+# On push, deploys ONLY the changed <service>→<env> pairs — one team's release
+# never touches another service or environment. Tag deployed = what's in the values
+# file (no --set overrides). Roll back by reverting the bump commit.
 #
-# Three separate jobs (deploy-dev / deploy-qa / deploy-prod) keep each
-# environment tracked independently and gated by its own GitHub Environment
-# (set required reviewers on qa + prod; leave dev open for auto-deploy).
+# Three separate jobs keep each environment tracked independently, gated by its
+# own GitHub Environment (set required reviewers on qa + prod; dev auto-deploys).
 on:
   push:
     branches: [main]
     paths:
-      - "environments/**"
-      - "charts/**"
+      - "services/**"
   workflow_dispatch:
     inputs:
       environment:
@@ -66,9 +63,9 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ENV="${{ inputs.environment }}"
             if [ "${{ inputs.service }}" = "all" ]; then
-              # every service that has a values file in the chosen env
-              for f in environments/"$ENV"/*.yaml; do
-                [ -e "$f" ] && basename "$f" .yaml >> "/tmp/$ENV.list"
+              for d in services/*/; do
+                svc="$(basename "$d")"
+                [ -f "services/$svc/$ENV.yaml" ] && echo "$svc" >> "/tmp/$ENV.list"
               done
             else
               echo "${{ inputs.service }}" >> "/tmp/$ENV.list"
@@ -79,21 +76,24 @@ jobs:
               BEFORE="$(git rev-parse HEAD^ 2>/dev/null || echo '')"
             fi
             if [ -n "$BEFORE" ]; then
-              FILES="$(git diff --name-only "$BEFORE" HEAD -- environments/ charts/)"
+              FILES="$(git diff --name-only "$BEFORE" HEAD -- services/)"
             else
-              FILES="$(git ls-files environments/ charts/)"
+              FILES="$(git ls-files services/)"
             fi
 
             while IFS= read -r f; do
               [ -z "$f" ] && continue
+              # services/<svc>/dev.yaml  → dev, <svc>
+              # services/<svc>/qa.yaml   → qa,  <svc>
+              # services/<svc>/prod.yaml → prod, <svc>
+              # services/<svc>/chart/**  → all envs, <svc>
               case "$f" in
-                environments/*/*.yaml)
-                  E="$(echo "$f" | cut -d/ -f2)"
-                  S="$(echo "$f" | cut -d/ -f3 | sed 's/\.yaml$//')"
+                services/*/dev.yaml|services/*/qa.yaml|services/*/prod.yaml)
+                  S="$(echo "$f" | cut -d/ -f2)"
+                  E="$(basename "$f" .yaml)"
                   echo "$S" >> "/tmp/$E.list"
                   ;;
-                charts/*/*)
-                  # a chart change redeploys that service to every environment
+                services/*/chart/*)
                   S="$(echo "$f" | cut -d/ -f2)"
                   for E in $ENVS; do echo "$S" >> "/tmp/$E.list"; done
                   ;;
@@ -138,14 +138,15 @@ jobs:
         run: kubectl get ns dev >/dev/null 2>&1 || kubectl create ns dev
       - name: Deploy ${{ matrix.service }} → dev
         run: |
-          helm upgrade --install "${{ matrix.service }}" "charts/${{ matrix.service }}" \
+          helm upgrade --install "${{ matrix.service }}" \
+            "services/${{ matrix.service }}/chart" \
             --namespace dev \
-            --values "environments/dev/${{ matrix.service }}.yaml" \
+            --values "services/${{ matrix.service }}/dev.yaml" \
             --wait --timeout 5m
       - name: Verify rollout
         run: |
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace dev --timeout 300s
-          kubectl get pods -n dev -l app=${{ matrix.service }}
+          kubectl get pods -n dev -l "app=${{ matrix.service }}"
 
   # ── QA (gated by 'qa' environment) ───────────────────────────────────────────
   deploy-qa:
@@ -173,14 +174,15 @@ jobs:
         run: kubectl get ns qa >/dev/null 2>&1 || kubectl create ns qa
       - name: Deploy ${{ matrix.service }} → qa
         run: |
-          helm upgrade --install "${{ matrix.service }}" "charts/${{ matrix.service }}" \
+          helm upgrade --install "${{ matrix.service }}" \
+            "services/${{ matrix.service }}/chart" \
             --namespace qa \
-            --values "environments/qa/${{ matrix.service }}.yaml" \
+            --values "services/${{ matrix.service }}/qa.yaml" \
             --wait --timeout 5m
       - name: Verify rollout
         run: |
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace qa --timeout 300s
-          kubectl get pods -n qa -l app=${{ matrix.service }}
+          kubectl get pods -n qa -l "app=${{ matrix.service }}"
 
   # ── PROD (gated by 'prod' environment) ───────────────────────────────────────
   deploy-prod:
@@ -208,11 +210,12 @@ jobs:
         run: kubectl get ns prod >/dev/null 2>&1 || kubectl create ns prod
       - name: Deploy ${{ matrix.service }} → prod
         run: |
-          helm upgrade --install "${{ matrix.service }}" "charts/${{ matrix.service }}" \
+          helm upgrade --install "${{ matrix.service }}" \
+            "services/${{ matrix.service }}/chart" \
             --namespace prod \
-            --values "environments/prod/${{ matrix.service }}.yaml" \
+            --values "services/${{ matrix.service }}/prod.yaml" \
             --wait --timeout 5m
       - name: Verify rollout
         run: |
           kubectl rollout status "deployment/${{ matrix.service }}" --namespace prod --timeout 300s
-          kubectl get pods -n prod -l app=${{ matrix.service }}
+          kubectl get pods -n prod -l "app=${{ matrix.service }}"
