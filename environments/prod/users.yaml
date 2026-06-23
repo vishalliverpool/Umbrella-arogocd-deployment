@@ -1,0 +1,7 @@
+# prod overrides for users — image.tag is bumped by users release.yml on a release tag (vX.Y.Z).
+replicaCount: 3
+image:
+  tag: "1.0.4"
+resources:
+  requests: { cpu: 100m, memory: 128Mi }
+  limits:   { cpu: 500m, memory: 256Mi }

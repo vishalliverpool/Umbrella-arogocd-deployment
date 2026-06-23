@@ -1,0 +1,7 @@
+apiVersion: v2
+name: payments
+description: Helm chart for the payments microservice
+type: application
+# version (chart) and appVersion (image tag) are overwritten by the release pipeline from the git tag.
+version: 0.1.0
+appVersion: "1.0.0"

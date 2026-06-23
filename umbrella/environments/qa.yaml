@@ -1,9 +1,0 @@
-# QA environment overrides — applied on top of umbrella/values.yaml.
-# Tag-triggered + approval-gated deploys land here (namespace: qa).
-
-orders:
-  replicaCount: 2
-users:
-  replicaCount: 2
-payments:
-  replicaCount: 2

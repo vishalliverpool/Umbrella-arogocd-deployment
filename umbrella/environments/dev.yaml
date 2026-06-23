@@ -1,9 +1,0 @@
-# DEV environment overrides — applied on top of umbrella/values.yaml.
-# Branch-triggered deploys land here (namespace: dev). Keep it lean.
-
-orders:
-  replicaCount: 1
-users:
-  replicaCount: 1
-payments:
-  replicaCount: 1

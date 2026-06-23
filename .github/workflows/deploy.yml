@@ -1,0 +1,145 @@
+name: deploy
+
+# Per-service, per-environment GitOps deploy.
+# A service pipeline bumps environments/<env>/<service>.yaml and pushes here;
+# this workflow deploys ONLY the changed service(s) into the matching namespace,
+# so one team's release never disturbs another service or another environment.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "environments/**"
+      - "charts/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to (re)deploy"
+        required: true
+        type: choice
+        options: [dev, qa, prod]
+      service:
+        description: "Service to (re)deploy"
+        required: true
+        type: choice
+        options: [orders, users, payments]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: platform-cluster
+  DEPLOY_ROLE: arn:aws:iam::218804696766:role/github-actions-deploy
+
+jobs:
+  # ── Figure out which <env>/<service> pairs changed in this push ──────────────
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.changes.outputs.matrix }}
+      any: ${{ steps.changes.outputs.any }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - id: changes
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual run targets a single explicit pair.
+            ITEMS="{\"env\":\"${{ inputs.environment }}\",\"service\":\"${{ inputs.service }}\"}"
+          else
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              BEFORE="$(git rev-parse HEAD^ 2>/dev/null || echo '')"
+            fi
+
+            if [ -n "$BEFORE" ]; then
+              FILES="$(git diff --name-only "$BEFORE" HEAD -- environments/ charts/)"
+            else
+              FILES="$(git ls-files environments/ charts/)"
+            fi
+
+            # environments/<env>/<service>.yaml  → {env,service}
+            # charts/<service>/**                → redeploy that service to ALL envs
+            ENVS="dev qa prod"
+            PAIRS=""
+            while IFS= read -r f; do
+              [ -z "$f" ] && continue
+              case "$f" in
+                environments/*/*.yaml)
+                  E="$(echo "$f" | cut -d/ -f2)"
+                  S="$(echo "$f" | cut -d/ -f3 | sed 's/\.yaml$//')"
+                  PAIRS="${PAIRS}\n${E} ${S}"
+                  ;;
+                charts/*/*)
+                  S="$(echo "$f" | cut -d/ -f2)"
+                  for E in $ENVS; do PAIRS="${PAIRS}\n${E} ${S}"; done
+                  ;;
+              esac
+            done <<< "$FILES"
+
+            ITEMS="$(printf "%b" "$PAIRS" | sed '/^$/d' | sort -u | while read -r E S; do
+              echo "{\"env\":\"$E\",\"service\":\"$S\"}"
+            done | paste -sd, -)"
+          fi
+
+          if [ -z "${ITEMS:-}" ]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+            echo 'matrix={"include":[]}' >> "$GITHUB_OUTPUT"
+            echo "No deployable changes detected."
+          else
+            echo "any=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":[$ITEMS]}" >> "$GITHUB_OUTPUT"
+            echo "Deploy targets: [$ITEMS]"
+          fi
+
+  # ── Deploy each changed pair independently ───────────────────────────────────
+  deploy:
+    needs: detect
+    if: needs.detect.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    # GitHub Environment protection drives approvals: set required reviewers on
+    # 'qa' and 'prod' so those deploys gate; leave 'dev' open for auto-deploy.
+    environment: ${{ matrix.env }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.14.4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.DEPLOY_ROLE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Ensure namespace exists
+        run: |
+          kubectl get namespace "${{ matrix.env }}" >/dev/null 2>&1 \
+            || kubectl create namespace "${{ matrix.env }}"
+
+      - name: Helm upgrade --install (${{ matrix.service }} → ${{ matrix.env }})
+        run: |
+          helm upgrade --install "${{ matrix.service }}" "charts/${{ matrix.service }}" \
+            --namespace "${{ matrix.env }}" \
+            --values "environments/${{ matrix.env }}/${{ matrix.service }}.yaml" \
+            --wait \
+            --timeout 5m
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status "deployment/${{ matrix.service }}" \
+            --namespace "${{ matrix.env }}" --timeout 300s
+          kubectl get pods -n "${{ matrix.env }}" -l app=${{ matrix.service }}
