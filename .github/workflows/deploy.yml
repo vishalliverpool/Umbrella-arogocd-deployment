@@ -89,6 +89,8 @@ jobs:
         service: ${{ fromJson(needs.setup.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: azure/setup-helm@v4
         with:
@@ -146,6 +148,8 @@ jobs:
         service: ${{ fromJson(needs.setup.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: azure/setup-helm@v4
         with:
@@ -188,6 +192,8 @@ jobs:
         service: ${{ fromJson(needs.setup.outputs.services) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
 
       - uses: azure/setup-helm@v4
         with:
