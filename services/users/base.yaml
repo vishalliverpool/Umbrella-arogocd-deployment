@@ -1,5 +1,0 @@
-name: users
-image:
-  repository: 218804696766.dkr.ecr.us-east-1.amazonaws.com/users
-service:
-  targetPort: 3000

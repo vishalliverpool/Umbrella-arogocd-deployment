@@ -1,0 +1,18 @@
+replicaCount: 1
+
+image:
+  repository: 218804696766.dkr.ecr.us-east-1.amazonaws.com/users
+  tag: ""
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits:   {cpu: 200m, memory: 128Mi}
+
+ingress:
+  enabled: false

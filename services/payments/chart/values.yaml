@@ -1,9 +1,7 @@
-name: ""
-
 replicaCount: 1
 
 image:
-  repository: ""
+  repository: 218804696766.dkr.ecr.us-east-1.amazonaws.com/payments
   tag: ""
   pullPolicy: IfNotPresent
 

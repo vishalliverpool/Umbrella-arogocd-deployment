@@ -1,5 +1,0 @@
-name: orders
-image:
-  repository: 218804696766.dkr.ecr.us-east-1.amazonaws.com/orders
-service:
-  targetPort: 3000
