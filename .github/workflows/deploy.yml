@@ -124,10 +124,10 @@ jobs:
 
       - name: Deploy ${{ matrix.service }} → dev
         run: |
-          helm upgrade --install "${{ matrix.service }}" \
-            "services/${{ matrix.service }}/chart" \
+          helm upgrade --install "${{ matrix.service }}" chart \
             --namespace dev \
-            --values "services/${{ matrix.service }}/dev.yaml" \
+            --values "environments/dev.yaml" \
+            --values "services/${{ matrix.service }}/base.yaml" \
             --set image.tag="${{ steps.tag.outputs.tag }}" \
             --wait --timeout 5m
 
@@ -169,9 +169,10 @@ jobs:
 
       - name: Deploy ${{ matrix.service }} → qa
         run: |
-          helm upgrade --install "${{ matrix.service }}" \
-            "services/${{ matrix.service }}/chart" \
+          helm upgrade --install "${{ matrix.service }}" chart \
             --namespace qa \
+            --values "environments/qa.yaml" \
+            --values "services/${{ matrix.service }}/base.yaml" \
             --values "services/${{ matrix.service }}/qa.yaml" \
             --wait --timeout 5m
 
@@ -213,9 +214,10 @@ jobs:
 
       - name: Deploy ${{ matrix.service }} → prod
         run: |
-          helm upgrade --install "${{ matrix.service }}" \
-            "services/${{ matrix.service }}/chart" \
+          helm upgrade --install "${{ matrix.service }}" chart \
             --namespace prod \
+            --values "environments/prod.yaml" \
+            --values "services/${{ matrix.service }}/base.yaml" \
             --values "services/${{ matrix.service }}/prod.yaml" \
             --wait --timeout 5m
 

@@ -1,0 +1,5 @@
+name: payments
+image:
+  repository: 218804696766.dkr.ecr.us-east-1.amazonaws.com/payments
+service:
+  targetPort: 3000
